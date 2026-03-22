@@ -1029,6 +1029,9 @@ function advancePINSetup() {
     _pinSetupPhase  = 'confirm';
     $('pin-setup-prompt').textContent = 'Confirm your PIN';
     updatePINSetupDots();
+    // Clear and re-focus the hidden input so keyboard entry works on confirmation step
+    const inp = $('setup-pin-input');
+    if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 50); }
   } else {
     if (_pinSetupBuffer !== _pinSetupFirstEntry) {
       toast('PINs do not match — try again');
