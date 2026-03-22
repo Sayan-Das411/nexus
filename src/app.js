@@ -47,6 +47,11 @@ const S = {
 // ============================================================
 // DOM HELPERS
 // ============================================================
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+         ('ontouchstart' in window && navigator.maxTouchPoints > 1);
+}
+
 const $  = id  => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
