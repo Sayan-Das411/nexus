@@ -87,7 +87,8 @@
       /* Layout constants (not overridden by themes) */
       --header-h:      56px;
       --input-area-h:  64px;
-      --max-w:         480px;
+      --max-w:         520px;
+      --max-w-desktop: 820px;
     }
 
     /* =====================================================
@@ -947,7 +948,7 @@
       display: flex;
       flex-direction: column;
       margin-bottom: 2px;
-      max-width: 100%;
+      width: 100%;   /* must be full width for alignment to work */
     }
 
     .msg-row.own {
@@ -1439,36 +1440,86 @@
       .screen-onboard {
         padding: 60px 32px;
       }
+    }
 
-      .messages-list {
-        padding: 16px;
-      }
-
-      .app-header,
-      .input-area,
-      .messages-list,
-      .overlay-panel {
-        max-width: var(--max-w);
-        align-self: center;
-      }
-
+    /* Desktop: give the chat room to breathe */
+    @media (min-width: 900px) {
       #s-app {
+        display: grid;
+        grid-template-rows: var(--header-h) 1fr auto auto;
+        grid-template-columns: 1fr min(var(--max-w-desktop), 100%) 1fr;
         align-items: stretch;
+        background: var(--bg-alt);
       }
 
       .app-header {
+        grid-column: 1 / -1;
+        display: flex;
+        justify-content: center;
+        padding: 0 0;
+      }
+
+      .app-header > * {
+        max-width: var(--max-w-desktop);
         width: 100%;
-        max-width: 100%;
+        display: contents;
+      }
+
+      /* Re-apply header internals properly */
+      .app-header {
+        gap: 0;
+        padding: 0;
+      }
+
+      .messages-list {
+        grid-column: 2;
+        padding: 20px 28px;
+        background: var(--bg);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+      }
+
+      .typing-indicator {
+        grid-column: 2;
+        background: var(--bg);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        padding: 6px 28px;
+      }
+
+      .input-area {
+        grid-column: 2;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        padding: 12px 20px;
+      }
+
+      #install-btn-wrap {
+        bottom: 100px;
+        right: calc(50% - var(--max-w-desktop)/2 - 70px);
       }
 
       .overlay-panel {
         border-radius: var(--radius-xl);
         margin-bottom: 40px;
         width: 100%;
-        max-width: 460px;
+        max-width: 480px;
         align-self: flex-end;
         margin-right: auto;
         margin-left: auto;
+      }
+
+      /* Wider message bubbles on desktop */
+      .msg-bubble {
+        max-width: min(65%, 520px);
+      }
+    }
+
+    /* Simple centering for 600-899px (tablet range) */
+    @media (min-width: 600px) and (max-width: 899px) {
+      .messages-list {
+        padding: 16px 20px;
       }
     }
 
@@ -1759,8 +1810,25 @@
         <div class="pin-setup-dot"></div>
       </div>
 
-      <!-- Numpad -->
-      <div class="pin-grid">
+      <!-- Hidden input for keyboard entry -->
+      <input
+        id="setup-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="off"
+        aria-label="Enter PIN"
+        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;"
+      >
+
+      <!-- Desktop hint -->
+      <div id="setup-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (mobile only) -->
+      <div id="setup-numpad" class="pin-grid">
         <button class="pin-key pin-setup-key" data-val="1">1</button>
         <button class="pin-key pin-setup-key" data-val="2">2</button>
         <button class="pin-key pin-setup-key" data-val="3">3</button>
@@ -1858,8 +1926,26 @@
         <div class="pin-dot"></div>
       </div>
 
-      <!-- Numpad -->
-      <div class="pin-grid">
+      <!-- Hidden input — receives keyboard typing on desktop,
+           triggers numeric system keyboard on mobile -->
+      <input
+        id="lock-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="one-time-code"
+        aria-label="Enter PIN"
+        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;"
+      >
+
+      <!-- Desktop hint (shown instead of numpad) -->
+      <div id="lock-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (shown on mobile, hidden on desktop) -->
+      <div id="lock-numpad" class="pin-grid">
         <button class="pin-key pin-lock-key" data-val="1">1</button>
         <button class="pin-key pin-lock-key" data-val="2">2</button>
         <button class="pin-key pin-lock-key" data-val="3">3</button>

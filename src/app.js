@@ -211,6 +211,16 @@ async function showLockScreen() {
   clearPINDisplay();
   showScreen('s-lock');
 
+  // Desktop: hide on-screen numpad, focus the hidden keyboard input.
+  // Mobile: show numpad, hidden input still triggers system number keyboard.
+  const mobile = isMobileDevice();
+  const numpad = $('lock-numpad');
+  const hint   = $('lock-keyboard-hint');
+  if (numpad) numpad.classList.toggle('hidden', !mobile);
+  if (hint)   hint.classList.toggle('hidden',   mobile);
+  const inp = $('lock-pin-input');
+  if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 350); }
+
   // Auto-trigger biometrics
   if (bioAvail && bioEnabled) {
     setTimeout(() => attemptBiometricUnlock(), 400);
@@ -248,6 +258,8 @@ let _pinBuffer = '';
 function clearPINDisplay() {
   _pinBuffer = '';
   updatePINDots();
+  const inp = $('lock-pin-input');
+  if (inp) inp.value = '';
 }
 
 function updatePINDots() {
@@ -267,6 +279,14 @@ function onPINDigit(d) {
 function onPINBackspace() {
   _pinBuffer = _pinBuffer.slice(0, -1);
   updatePINDots();
+}
+
+function onLockPINInput(e) {
+  const raw = (e.target.value || '').replace(/\D/g, '').slice(0, 6);
+  e.target.value = raw;
+  _pinBuffer = raw;
+  updatePINDots();
+  if (_pinBuffer.length === 6) setTimeout(submitPIN, 150);
 }
 
 async function submitPIN() {
@@ -458,7 +478,7 @@ function buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers) {
       <div class="msg-bubble" onclick="Nexus.onBubbleClick(event, '${escHtml(msg.id)}')">
         ${content}
         <div class="msg-meta">
-          <span class="msg-time hidden" id="t-${escHtml(msg.id)}">${time}</span>
+          <span class="msg-time" id="t-${escHtml(msg.id)}">${time}</span>
           ${readTick}
         </div>
       </div>
@@ -605,8 +625,11 @@ function renderTypingIndicator() {
   }
 
   const names = S.typingDevices.map(did => {
+    // S.devices comes from Firebase subscribeDevices — use it for live names.
+    // Fall back to presence map name, then a generic label.
     const dev = S.devices[did];
-    return dev?.name ?? 'Another device';
+    const pres = S.presenceMap[did];
+    return dev?.name ?? pres?.deviceName ?? 'Another device';
   });
 
   el.textContent =
@@ -620,13 +643,27 @@ function renderTypingIndicator() {
 // ONLINE STATUS IN HEADER
 // ============================================================
 function renderOnlineStatus() {
-  const onlineDevices = Object.values(S.presenceMap).filter(p => p.online);
+  // Filter to genuinely online devices: must have online=true and a lastSeen
+  // within the last 3 minutes (guards against stale Firebase entries where
+  // onDisconnect didn't fire, e.g. browser force-closed or network drop).
+  const STALE_MS = 3 * 60 * 1000;
+  const now = Date.now();
+
+  const onlineDevices = Object.values(S.presenceMap).filter(p =>
+    p.online && (!p.lastSeen || (now - p.lastSeen) < STALE_MS)
+  );
+
+  // Deduplicate by name — multiple device registrations from setup retries
+  // can produce entries with the same name, which we only want to show once.
+  const uniqueNames = [...new Set(onlineDevices.map(p => p.deviceName ?? 'device'))];
+
   const sub = $('header-sub');
   if (!sub) return;
 
-  if (onlineDevices.length) {
-    const names = onlineDevices.map(p => p.deviceName ?? 'device').join(', ');
-    sub.textContent = `${names} online`;
+  if (uniqueNames.length) {
+    sub.textContent = uniqueNames.length === 1
+      ? `${uniqueNames[0]} online`
+      : `${uniqueNames.join(', ')} online`;
     sub.classList.remove('hidden');
   } else {
     sub.classList.add('hidden');
@@ -808,14 +845,23 @@ async function handleGoogleSignIn() {
     $('signin-btn').disabled = true;
     $('signin-btn').textContent = 'Signing in…';
 
-    const { user, isNewAccount, deviceId } = await signInWithGoogle();
+    const { user, deviceId } = await signInWithGoogle();
     S.uid      = user.uid;
     S.deviceId = deviceId;
+
+    // Always check Firebase to determine if this is truly a new account.
+    // Never rely on local IndexedDB alone — a second device has no local data
+    // and would incorrectly appear as a new account, generating a fresh salt
+    // and deriving a completely different encryption key even with the same
+    // passphrase. That was the root cause of the decryption failure.
+    $('signin-btn').textContent = 'Checking account…';
+    const profile = await getProfile(user.uid).catch(() => null);
+    const isNewAccount = !profile?.encryptionSalt;
 
     if (isNewAccount) {
       showScreen('s-passphrase-setup');
     } else {
-      // Returning account — check if key is cached
+      // Existing account — check if this device has a cached key already
       const keyData = await keyStore.get(user.uid);
       if (keyData?.key) {
         S.encKey = keyData.key;
@@ -826,6 +872,7 @@ async function handleGoogleSignIn() {
           showScreen('s-pin-setup');
         }
       } else {
+        // Key not cached on this device — need passphrase entry to re-derive it
         showScreen('s-passphrase-entry');
       }
     }
@@ -991,9 +1038,38 @@ function advancePINSetup() {
   }
 }
 
+function onSetupPINInput(e) {
+  const raw = (e.target.value || '').replace(/\D/g, '').slice(0, 6);
+  e.target.value = raw;
+  _pinSetupBuffer = raw;
+  updatePINSetupDots();
+  if (_pinSetupBuffer.length === 6) setTimeout(advancePINSetup, 200);
+}
+
+function initPINSetupScreen() {
+  _pinSetupBuffer = '';
+  _pinSetupFirstEntry = '';
+  _pinSetupPhase = 'create';
+  updatePINSetupDots();
+  const prompt = $('pin-setup-prompt');
+  if (prompt) prompt.textContent = 'Create a 6-digit PIN';
+  const mobile = isMobileDevice();
+  const numpad = $('setup-numpad');
+  const hint   = $('setup-keyboard-hint');
+  if (numpad) numpad.classList.toggle('hidden', !mobile);
+  if (hint)   hint.classList.toggle('hidden',   mobile);
+  const inp = $('setup-pin-input');
+  if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 350); }
+}
+
 async function completePINSetup(pin) {
   try {
     await setupPIN(S.uid, pin);
+    _pinSetupBuffer = '';
+    _pinSetupFirstEntry = '';
+    _pinSetupPhase = 'create';
+    const inp = $('setup-pin-input');
+    if (inp) inp.value = '';
     showScreen('s-biometrics-setup');
   } catch (err) {
     toast('PIN setup failed: ' + err.message);
@@ -1101,6 +1177,11 @@ function bindEvents() {
       else onPINSetupDigit(val);
     });
   });
+  $('setup-pin-input')?.addEventListener('input', onSetupPINInput);
+  $('setup-pin-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && _pinSetupBuffer.length === 6) advancePINSetup();
+  });
+  initPINSetupScreen();
 
   // ---- Biometrics ----
   $('bio-setup-btn')?.addEventListener('click', handleBiometricSetup);
@@ -1119,6 +1200,11 @@ function bindEvents() {
       if (val === 'back') onPINBackspace();
       else onPINDigit(val);
     });
+  });
+  // Hidden keyboard input (desktop types directly here)
+  $('lock-pin-input')?.addEventListener('input', onLockPINInput);
+  $('lock-pin-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && _pinBuffer.length > 0) submitPIN();
   });
   $('lock-bio-btn')?.addEventListener('click', attemptBiometricUnlock);
 
