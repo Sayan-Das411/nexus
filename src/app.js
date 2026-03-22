@@ -22,12 +22,17 @@ import { setupPIN, verifyPIN, isLockSetUp, setupBiometrics,
          setAutoLockMinutes, startAutoLockTimer }
   from './lock.js';
 import { THEMES, applyTheme, loadTheme, saveTheme } from './themes.js';
-// drive.js tokens are managed in auth.js; no direct imports needed in app.js
+import { saveAccentColor, clearAccentColor, saveOwnBubbleColor, clearOwnBubbleColor,
+         saveWallpaper, clearWallpaper, applyAccentColor, applyOwnBubbleColor,
+         applyWallpaper, compressWallpaper, compressAvatar,
+         applyStoredAppearance, loadAppearance } from './appearance.js';
+import { cancelCurrentUpload } from './drive.js';
 import { getSpineConfig, addSpineAccount, removeSpineAccount,
          getStorageSummary, getManifestEntry,
          checkAndRestoreFolders } from './spine.js';
 import { prepareMediaMessage, fetchMedia, decryptThumbnail,
          buildFileBubbleHTML, formatBytes } from './media.js';
+import { updateProfileAvatar } from './realtime.js';
 
 // ============================================================
 // STATE
@@ -51,6 +56,8 @@ const S = {
   spineConfig:     null,   // loaded after sign-in
   mediaUploading:  false,  // prevents concurrent uploads
   pendingMessages: new Map(), // ciphertext → localId for optimistic offline rendering
+  avatarDataUrl:   null,   // decrypted profile picture data URL
+  email:           null,   // current account email
 };
 
 // ============================================================
@@ -212,8 +219,15 @@ async function tryAutoInit() {
 async function showLockScreen() {
   const account = await getCurrentAccount();
   if (account) {
-    $('lock-avatar').textContent = avatarLetter(account.email);
-    $('lock-email').textContent  = account.email;
+    const lockAv = $('lock-avatar');
+    if (lockAv) {
+      if (S.avatarDataUrl) {
+        lockAv.innerHTML = `<img src="${S.avatarDataUrl}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+      } else {
+        lockAv.textContent = avatarLetter(account.email);
+      }
+    }
+    $('lock-email').textContent = account.email;
   }
 
   const bioAvail    = await biometricsAvailable();
@@ -355,6 +369,7 @@ async function startChat() {
   S.deviceId   = account.deviceId;
   S.deviceName = account.deviceName;
   S.platform   = account.platform ?? detectPlatform();
+  S.email      = account.email;
 
   // Update header
   $('header-avatar').textContent = avatarLetter(account.email);
@@ -406,9 +421,13 @@ async function startChat() {
   // Do NOT scroll here — messages haven't loaded yet (Firebase is async).
   // scrollToBottom is called inside renderMessages after the DOM is updated.
 
-  // Apply per-account theme
+  // Apply per-account theme then appearance overrides
   const themeId = await loadTheme(S.uid);
   applyTheme(themeId);
+  await applyStoredAppearance(S.uid);
+
+  // Load and display profile picture
+  await loadAndApplyAvatar();
 
   // Ensure auto-lock timer is running now that chat is open
   startAutoLockTimer();
@@ -681,10 +700,10 @@ function buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers) {
   return `
     <div class="msg-row ${side}" data-id="${escHtml(msg.id)}">
       ${deviceBadge}
-      <div class="msg-bubble" onclick="Nexus.onBubbleClick(event, '${escHtml(msg.id)}')">
+      <div class="msg-bubble">
         ${content}
         <div class="msg-meta">
-          <span class="msg-time" id="t-${escHtml(msg.id)}">${time}</span>
+          <span class="msg-time">${time}</span>
           ${readTick}
         </div>
       </div>
@@ -760,11 +779,6 @@ function showLightbox(url, title) {
   lb.classList.remove('hidden');
 }
 
-window.Nexus.onBubbleClick = function(ev, msgId) {
-  const timeEl = $(`t-${msgId}`);
-  if (timeEl) timeEl.classList.toggle('hidden');
-};
-
 // Simple text formatter: bold, italic, mono
 function formatText(escaped) {
   return escaped
@@ -799,10 +813,11 @@ async function handleMediaSend(file) {
   setSendBtnState(false);
   const attachBtn = $('attach-btn');
   if (attachBtn) attachBtn.disabled = true;
-  toast('Uploading…', 60000);
+  showUploadProgress(0);
 
   try {
-    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file);
+    const onProgress = frac => updateUploadProgress(frac);
+    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, onProgress);
 
     // Encrypt the media metadata (filename, uuid reference) as the message content
     const metaText = JSON.stringify({
@@ -837,8 +852,13 @@ async function handleMediaSend(file) {
     toast('Sent');
   } catch (err) {
     console.error('[media send]', err);
-    toast('Upload failed: ' + err.message);
+    if (err.message === 'Upload cancelled') {
+      toast('Upload cancelled');
+    } else {
+      toast('Upload failed: ' + err.message);
+    }
   } finally {
+    hideUploadProgress();
     S.mediaUploading = false;
     setSendBtnState(true);
     if (attachBtn) attachBtn.disabled = false;
@@ -956,6 +976,78 @@ function removePendingBubble(ciphertext) {
   S.pendingMessages.delete(ciphertext);
   const el = document.querySelector(`.pending-bubble[data-pending-id="${localId}"]`);
   if (el) el.remove();
+}
+
+// ============================================================
+// UPLOAD PROGRESS BAR
+// ============================================================
+
+function showUploadProgress(frac) {
+  const wrap = $('upload-progress-wrap');
+  const fill = $('upload-progress-fill');
+  const pct  = $('upload-progress-pct');
+  if (wrap) wrap.classList.remove('hidden');
+  const p = Math.round(frac * 100);
+  if (fill) fill.style.width = p + '%';
+  if (pct)  pct.textContent  = p + '%';
+}
+
+function updateUploadProgress(frac) {
+  const fill = $('upload-progress-fill');
+  const pct  = $('upload-progress-pct');
+  const p    = Math.round(frac * 100);
+  if (fill) fill.style.width = p + '%';
+  if (pct)  pct.textContent  = p + '%';
+}
+
+function hideUploadProgress() {
+  $('upload-progress-wrap')?.classList.add('hidden');
+  const fill = $('upload-progress-fill');
+  if (fill) fill.style.width = '0%';
+}
+
+// ============================================================
+// PROFILE PICTURE
+// ============================================================
+
+// Load, decrypt, and display the profile picture stored in Firebase.
+async function loadAndApplyAvatar() {
+  if (!S.uid || !S.encKey) return;
+  try {
+    const profile = await getProfile(S.uid);
+    if (!profile?.avatar) {
+      S.avatarDataUrl = null;
+    } else {
+      const parsed = JSON.parse(profile.avatar);
+      S.avatarDataUrl = await decrypt(S.encKey, parsed.ciphertext, parsed.iv);
+    }
+  } catch {
+    S.avatarDataUrl = null;
+  }
+  updateAvatarDisplay();
+}
+
+// Update every avatar element in the UI.
+function updateAvatarDisplay() {
+  const letter = avatarLetter(S.email ?? '');
+  const imgHtml = S.avatarDataUrl
+    ? `<img src="${S.avatarDataUrl}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`
+    : letter;
+
+  // Header
+  const headerEl = $('header-avatar');
+  if (headerEl) {
+    if (S.avatarDataUrl) headerEl.innerHTML = imgHtml;
+    else headerEl.textContent = letter;
+  }
+
+  // Settings preview
+  const settingsEl = $('settings-avatar-preview');
+  if (settingsEl) {
+    if (S.avatarDataUrl) settingsEl.innerHTML = imgHtml;
+    else settingsEl.textContent = letter;
+  }
+  $('settings-avatar-remove-btn')?.classList.toggle('hidden', !S.avatarDataUrl);
 }
 
 // ============================================================
@@ -1277,6 +1369,34 @@ async function openSettings() {
     autolockSel.value = String(lockData.autoLockMinutes);
   }
 
+  // Populate avatar preview
+  updateAvatarDisplay();
+
+  // Populate colour pickers with stored values or current theme defaults
+  const { accent, ownBubble, wallpaper } = await loadAppearance(S.uid);
+  const thId       = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+  const thDefAccent  = THEMES[thId]?.vars['--accent']  ?? '#8b5cf6';
+  const thDefBubble  = THEMES[thId]?.vars['--own-bg']  ?? '#6d44d4';
+
+  const accentPicker = $('settings-accent-color');
+  if (accentPicker) accentPicker.value = accent ?? thDefAccent;
+
+  const bubblePicker = $('settings-own-bubble-color');
+  if (bubblePicker) bubblePicker.value = ownBubble ?? thDefBubble;
+
+  // Wallpaper preview thumbnail
+  const wpPreview = $('settings-wallpaper-preview');
+  if (wpPreview) {
+    if (wallpaper) {
+      wpPreview.src = wallpaper;
+      wpPreview.classList.remove('hidden');
+      $('settings-wallpaper-remove')?.classList.remove('hidden');
+    } else {
+      wpPreview.classList.add('hidden');
+      $('settings-wallpaper-remove')?.classList.add('hidden');
+    }
+  }
+
   // Populate storage summary
   renderStorageSummary();
 
@@ -1285,7 +1405,9 @@ async function openSettings() {
 
 window.Nexus.setTheme = async function(themeId) {
   await saveTheme(S.uid, themeId);
-  // Update active state
+  // Re-apply stored colour overrides on top of new theme
+  await applyStoredAppearance(S.uid);
+  // Update active state on swatches
   $$('.theme-swatch').forEach(el => {
     el.classList.toggle('active', el.title === THEMES[themeId]?.label);
   });
@@ -1855,6 +1977,122 @@ function bindEvents() {
   // Init device name default
   const devInput = $('device-name-input');
   if (devInput && !devInput.value) devInput.value = getDefaultDeviceName();
+
+  // ---- Overlay backdrop click to close ----
+  // Clicking on the dark backdrop outside the panel closes the overlay.
+  $('overlay-settings')?.addEventListener('click', e => {
+    if (e.target === $('overlay-settings')) hide('overlay-settings');
+  });
+  $('overlay-accounts')?.addEventListener('click', e => {
+    if (e.target === $('overlay-accounts')) hide('overlay-accounts');
+  });
+
+  // ---- Upload progress cancel ----
+  $('upload-cancel-btn')?.addEventListener('click', () => {
+    cancelCurrentUpload();
+  });
+
+  // ---- Profile picture ----
+  $('settings-avatar-btn')?.addEventListener('click', () => {
+    $('avatar-file-input')?.click();
+  });
+
+  $('avatar-file-input')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const dataUrl   = await compressAvatar(file);
+      const { ciphertext, iv } = await encrypt(S.encKey, dataUrl);
+      await updateProfileAvatar(S.uid, JSON.stringify({ ciphertext, iv }));
+      S.avatarDataUrl = dataUrl;
+      updateAvatarDisplay();
+      toast('Profile photo updated');
+    } catch (err) {
+      toast('Could not set photo: ' + err.message);
+    }
+  });
+
+  $('settings-avatar-remove-btn')?.addEventListener('click', async () => {
+    try {
+      await updateProfileAvatar(S.uid, null);
+      S.avatarDataUrl = null;
+      updateAvatarDisplay();
+      toast('Profile photo removed');
+    } catch (err) {
+      toast('Error: ' + err.message);
+    }
+  });
+
+  // ---- Accent colour ----
+  $('settings-accent-color')?.addEventListener('input', async e => {
+    const hex = e.target.value;
+    applyAccentColor(hex);
+    await saveAccentColor(S.uid, hex);
+  });
+
+  $('settings-accent-reset')?.addEventListener('click', async () => {
+    await clearAccentColor(S.uid);
+    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+    applyTheme(thId);
+    // Re-apply any remaining overrides (e.g. own-bubble)
+    const { ownBubble } = await loadAppearance(S.uid);
+    if (ownBubble) applyOwnBubbleColor(ownBubble);
+    // Reset picker to theme default
+    const picker = $('settings-accent-color');
+    if (picker) picker.value = THEMES[thId]?.vars['--accent'] ?? '#8b5cf6';
+    toast('Accent colour reset');
+  });
+
+  // ---- Own bubble colour ----
+  $('settings-own-bubble-color')?.addEventListener('input', async e => {
+    const hex = e.target.value;
+    applyOwnBubbleColor(hex);
+    await saveOwnBubbleColor(S.uid, hex);
+  });
+
+  $('settings-own-bubble-reset')?.addEventListener('click', async () => {
+    await clearOwnBubbleColor(S.uid);
+    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+    const def  = THEMES[thId]?.vars['--own-bg'] ?? '#6d44d4';
+    applyOwnBubbleColor(def);
+    const picker = $('settings-own-bubble-color');
+    if (picker) picker.value = def;
+    toast('Bubble colour reset');
+  });
+
+  // ---- Wallpaper ----
+  $('settings-wallpaper-btn')?.addEventListener('click', () => {
+    $('wallpaper-file-input')?.click();
+  });
+
+  $('wallpaper-file-input')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      toast('Processing…', 5000);
+      const dataUrl = await compressWallpaper(file);
+      await saveWallpaper(S.uid, dataUrl);
+      applyWallpaper(dataUrl);
+      // Update preview in settings
+      const prev = $('settings-wallpaper-preview');
+      if (prev) { prev.src = dataUrl; prev.classList.remove('hidden'); }
+      $('settings-wallpaper-remove')?.classList.remove('hidden');
+      toast('Wallpaper set');
+    } catch (err) {
+      toast('Could not set wallpaper: ' + err.message);
+    }
+  });
+
+  $('settings-wallpaper-remove')?.addEventListener('click', async () => {
+    await clearWallpaper(S.uid);
+    applyWallpaper(null);
+    const prev = $('settings-wallpaper-preview');
+    if (prev) { prev.src = ''; prev.classList.add('hidden'); }
+    $('settings-wallpaper-remove')?.classList.add('hidden');
+    toast('Wallpaper removed');
+  });
 }
 
 // ============================================================

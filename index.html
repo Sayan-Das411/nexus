@@ -1657,6 +1657,177 @@
       padding-top: env(safe-area-inset-top, 0);
       padding-bottom: env(safe-area-inset-bottom, 0);
     }
+
+    /* =====================================================
+       UPLOAD PROGRESS BAR
+       ===================================================== */
+    .upload-progress-wrap {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      z-index: 5;
+    }
+    .upload-progress-inner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: var(--max-w-desktop);
+      margin: 0 auto;
+    }
+    .upload-progress-label {
+      font-size: 13px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .upload-progress-track {
+      flex: 1;
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .upload-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 150ms ease;
+      width: 0%;
+    }
+    .upload-progress-pct {
+      font-size: 12px;
+      color: var(--text-dim);
+      min-width: 30px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .upload-cancel-btn {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--danger);
+      background: none;
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-full);
+      padding: 3px 10px;
+      cursor: pointer;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: background var(--transition);
+      white-space: nowrap;
+    }
+    .upload-cancel-btn:hover { background: rgba(239,68,68,0.1); }
+
+    /* Desktop: upload bar spans full width */
+    @media (min-width: 900px) {
+      .upload-progress-wrap { grid-column: 1 / -1; }
+    }
+
+    /* =====================================================
+       PROFILE PICTURE / APPEARANCE SETTINGS
+       ===================================================== */
+    .profile-pic-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .settings-avatar-preview {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 26px;
+      color: #fff;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .profile-pic-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Colour picker rows */
+    .color-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .color-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+    .color-picker-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type="color"].color-swatch {
+      width: 36px;
+      height: 36px;
+      padding: 2px;
+      border: 1.5px solid var(--border2);
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    input[type="color"].color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"].color-swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+    .btn-color-reset {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-full);
+      padding: 3px 8px;
+      cursor: pointer;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: color var(--transition), border-color var(--transition);
+      white-space: nowrap;
+    }
+    .btn-color-reset:hover { color: var(--text-dim); border-color: var(--border2); }
+
+    /* Wallpaper preview thumbnail in settings */
+    .wallpaper-thumb {
+      width: 48px;
+      height: 36px;
+      border-radius: var(--radius-xs);
+      object-fit: cover;
+      border: 1px solid var(--border2);
+    }
+    .wallpaper-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      gap: 12px;
+    }
+    .wallpaper-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+    .wallpaper-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* When a wallpaper is active, make bubbles slightly more opaque
+       so they remain readable against complex backgrounds. */
+    .messages-list.has-wallpaper .msg-row.own .msg-bubble {
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    .messages-list.has-wallpaper .msg-row.other .msg-bubble {
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
   </style>
 </head>
 <body>
@@ -2118,6 +2289,18 @@
       </div>
     </header>
 
+    <!-- Upload Progress Bar (hidden until a media upload is in progress) -->
+    <div id="upload-progress-wrap" class="upload-progress-wrap hidden">
+      <div class="upload-progress-inner">
+        <span class="upload-progress-label">Uploading…</span>
+        <div class="upload-progress-track">
+          <div id="upload-progress-fill" class="upload-progress-fill"></div>
+        </div>
+        <span id="upload-progress-pct" class="upload-progress-pct">0%</span>
+        <button id="upload-cancel-btn" class="upload-cancel-btn">Cancel</button>
+      </div>
+    </div>
+
     <!-- Messages -->
     <div id="messages-list" class="messages-list">
       <div class="empty-state">
@@ -2220,12 +2403,56 @@
         </button>
       </div>
 
+      <!-- Profile -->
+      <div class="settings-section">
+        <div class="settings-section-title">Profile</div>
+        <div class="profile-pic-row">
+          <div id="settings-avatar-preview" class="settings-avatar-preview">?</div>
+          <div class="profile-pic-btns">
+            <button id="settings-avatar-btn" class="btn btn-ghost btn-sm">Change Photo</button>
+            <button id="settings-avatar-remove-btn" class="btn btn-ghost btn-sm hidden">Remove</button>
+          </div>
+        </div>
+        <input id="avatar-file-input" type="file" accept="image/*" style="display:none" aria-hidden="true">
+      </div>
+
+      <div class="settings-divider"></div>
+
       <!-- Theme -->
       <div class="settings-section">
         <div class="settings-section-title">Theme</div>
         <div id="theme-grid" class="theme-grid">
           <!-- Populated by app.js -->
         </div>
+
+        <!-- Accent colour override -->
+        <div class="color-row">
+          <label>Accent Colour</label>
+          <div class="color-picker-group">
+            <input type="color" id="settings-accent-color" class="color-swatch" value="#8b5cf6" title="Pick accent colour">
+            <button id="settings-accent-reset" class="btn-color-reset">Reset</button>
+          </div>
+        </div>
+
+        <!-- Own bubble colour override -->
+        <div class="color-row">
+          <label>My Bubbles</label>
+          <div class="color-picker-group">
+            <input type="color" id="settings-own-bubble-color" class="color-swatch" value="#6d44d4" title="Pick bubble colour">
+            <button id="settings-own-bubble-reset" class="btn-color-reset">Reset</button>
+          </div>
+        </div>
+
+        <!-- Wallpaper -->
+        <div class="wallpaper-row">
+          <label>Wallpaper</label>
+          <div class="wallpaper-controls">
+            <img id="settings-wallpaper-preview" class="wallpaper-thumb hidden" src="" alt="Wallpaper preview">
+            <button id="settings-wallpaper-btn" class="btn btn-ghost btn-sm">Choose</button>
+            <button id="settings-wallpaper-remove" class="btn btn-ghost btn-sm hidden">Remove</button>
+          </div>
+        </div>
+        <input id="wallpaper-file-input" type="file" accept="image/*" style="display:none" aria-hidden="true">
       </div>
 
       <div class="settings-divider"></div>

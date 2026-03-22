@@ -99,7 +99,7 @@ export async function generateThumbnail(file, maxSize = 200) {
 // Upload a media file and return the message payload fields to include
 // alongside the encrypted text payload.
 // Returns: { uuid, mediaType, fileName, fileSize, mimeType, thumbnailB64? }
-export async function prepareMediaMessage(uid, encKey, file) {
+export async function prepareMediaMessage(uid, encKey, file, onProgress) {
   validateFile(file);
 
   // Compress images
@@ -109,7 +109,7 @@ export async function prepareMediaMessage(uid, encKey, file) {
   const thumbB64 = await generateThumbnail(file);
 
   // Upload to Spine Drive
-  const { uuid, driveUid, driveFileId } = await uploadMedia(uid, encKey, fileToUpload);
+  const { uuid, driveUid, driveFileId } = await uploadMedia(uid, encKey, fileToUpload, onProgress);
 
   // Encrypt the thumbnail too if present
   let encThumb = null;
@@ -140,11 +140,10 @@ window.addEventListener('beforeunload', () => {
 });
 
 // Evict oldest entries if cache grows too large (max 50 media items in memory)
+// Cache stores Blobs, not object URLs, so no revocation needed here.
 function evictMediaCache() {
   if (_mediaCache.size <= 50) return;
   const oldest = _mediaCache.keys().next().value;
-  const entry  = _mediaCache.get(oldest);
-  if (entry) { URL.revokeObjectURL(entry.objectURL); }
   _mediaCache.delete(oldest);
 }
 

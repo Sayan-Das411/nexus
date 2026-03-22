@@ -249,6 +249,13 @@ export async function setupPresence(uid, deviceId, deviceName) {
   });
 }
 
+// Update the avatar stored in the profile (encrypted { ciphertext, iv } JSON string)
+export async function updateProfileAvatar(uid, encryptedAvatarJson) {
+  await update(ref(db(), P.profile(uid)), {
+    avatar: encryptedAvatarJson, // null to remove
+  });
+}
+
 // Subscribe to presence of OTHER devices
 export function subscribePresence(uid, myDeviceId, cb) {
   const r  = ref(db(), P.presence(uid));

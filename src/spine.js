@@ -183,7 +183,7 @@ async function decrementNexusUsed(uid, driveUid, bytes) {
 // ---- Upload media -----------------------------------------------------------
 // Encrypts the file with the Nexus key, uploads to Drive, records in manifest.
 // Returns the UUID.
-export async function uploadMedia(uid, encKey, file) {
+export async function uploadMedia(uid, encKey, file, onProgress) {
   // Generate a UUID for this file
   const uuid = crypto.randomUUID();
 
@@ -217,7 +217,7 @@ export async function uploadMedia(uid, encKey, file) {
   }
 
   // Upload
-  const driveFileId = await uploadFile(acc.driveUid, acc.folderId, uuid, encBlob);
+  const driveFileId = await uploadFile(acc.driveUid, acc.folderId, uuid, encBlob, onProgress);
 
   // Record in manifest
   await addManifestEntry(uid, uuid, {
