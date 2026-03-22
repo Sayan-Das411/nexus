@@ -562,6 +562,7 @@
       color: var(--text);
       border: 1.5px solid var(--border);
       box-shadow: var(--shadow-sm);
+      padding: 15px 28px;  /* extra horizontal padding so the G logo is never clipped */
     }
 
     .btn-google:hover:not(:disabled) {
@@ -1003,7 +1004,7 @@
     .msg-time {
       font-size: 11px;
       opacity: 0.65;
-      transition: opacity var(--transition);
+      /* Always visible — tap bubble to toggle if needed */
     }
 
     .read-tick {
