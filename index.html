@@ -1,0 +1,2296 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="deep-dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#8b5cf6">
+  <meta name="description" content="Your private, end-to-end encrypted personal messenger">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Nexus">
+
+  <title>Nexus</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <!-- Fonts: Syne (headings) + Figtree (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    /* =====================================================
+       RESET & BASE
+       ===================================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html {
+      height: 100%;
+      font-size: 16px;
+    }
+
+    body {
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* =====================================================
+       CSS VARIABLES — DEFAULTS (Deep Dark theme)
+       themes.js overwrites these at runtime
+       ===================================================== */
+    :root {
+      --bg:            #080810;
+      --bg-alt:        #0c0c18;
+      --surface:       #0f0f1a;
+      --surface2:      #141422;
+      --surface3:      #1a1a2e;
+      --border:        #1e1e32;
+      --border2:       #262640;
+      --accent:        #8b5cf6;
+      --accent-dim:    #6d44d4;
+      --accent-glow:   rgba(139,92,246,0.18);
+      --text:          #f0efff;
+      --text-dim:      #7878a0;
+      --text-muted:    #4a4a6a;
+      --own-bg:        #6d44d4;
+      --own-text:      #ffffff;
+      --other-bg:      #141422;
+      --other-text:    #f0efff;
+      --online:        #34d399;
+      --danger:        #ef4444;
+      --warning:       #f59e0b;
+      --success:       #10b981;
+      --shadow:        0 4px 16px rgba(0,0,0,0.5);
+      --shadow-sm:     0 2px 8px rgba(0,0,0,0.4);
+      --radius-xs:     6px;
+      --radius-sm:     10px;
+      --radius-md:     16px;
+      --radius-lg:     22px;
+      --radius-xl:     28px;
+      --radius-full:   9999px;
+      --transition:    220ms cubic-bezier(0.4,0,0.2,1);
+
+      /* Layout constants (not overridden by themes) */
+      --header-h:      56px;
+      --input-area-h:  64px;
+      --max-w:         520px;
+      --max-w-desktop: 820px;
+    }
+
+    /* =====================================================
+       UTILITY
+       ===================================================== */
+    .hidden { display: none !important; }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.88em;
+      background: var(--surface3);
+      padding: 1px 5px;
+      border-radius: var(--radius-xs);
+    }
+
+    /* =====================================================
+       SCREEN SYSTEM
+       ===================================================== */
+    .screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: var(--bg);
+      overflow-y: auto;
+      overflow-x: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 260ms ease, transform 260ms cubic-bezier(0.4,0,0.2,1);
+      transform: translateY(18px);
+      will-change: transform, opacity;
+    }
+
+    .screen.screen-active {
+      opacity: 1;
+      pointer-events: all;
+      transform: translateY(0);
+    }
+
+    .screen.screen-entering {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+
+    .screen.screen-leaving {
+      opacity: 0;
+      transform: translateY(-12px);
+      pointer-events: none;
+    }
+
+    /* Onboarding screens: vertically centered content */
+    .screen-onboard {
+      justify-content: center;
+      padding: 32px 24px env(safe-area-inset-bottom, 0);
+    }
+
+    .onboard-inner {
+      width: 100%;
+      max-width: var(--max-w);
+    }
+
+    /* =====================================================
+       LOADING SCREEN
+       ===================================================== */
+    #s-loading {
+      justify-content: center;
+      align-items: center;
+    }
+
+    .loading-logo {
+      width: 72px;
+      height: 72px;
+      border-radius: var(--radius-xl);
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      box-shadow: 0 0 32px var(--accent-glow);
+      animation: loading-pulse 2s ease-in-out infinite;
+    }
+
+    .loading-logo-letter {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 40px;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    @keyframes loading-pulse {
+      0%, 100% { box-shadow: 0 0 24px var(--accent-glow); }
+      50%       { box-shadow: 0 0 48px var(--accent-glow), 0 0 80px var(--accent-glow); }
+    }
+
+    #loading-msg {
+      font-size: 14px;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+      animation: blink-text 1.6s ease-in-out infinite;
+    }
+
+    @keyframes blink-text {
+      0%, 100% { opacity: 0.5; }
+      50%       { opacity: 1; }
+    }
+
+    /* =====================================================
+       WELCOME SCREEN
+       ===================================================== */
+    .welcome-logo-wrap {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 32px;
+    }
+
+    .welcome-logo {
+      width: 90px;
+      height: 90px;
+      border-radius: 26px;
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 40px var(--accent-glow), var(--shadow);
+    }
+
+    .welcome-logo-letter {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 52px;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .welcome-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 36px;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .welcome-sub {
+      font-size: 16px;
+      color: var(--text-dim);
+      text-align: center;
+      margin-bottom: 40px;
+      line-height: 1.6;
+    }
+
+    .feature-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 44px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+
+    .feature-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      background: var(--accent-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 18px;
+    }
+
+    .feature-text {
+      flex: 1;
+    }
+
+    .feature-text strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .feature-text span {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    /* =====================================================
+       ONBOARDING COMMON
+       ===================================================== */
+    .onboard-heading {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 26px;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .onboard-sub {
+      font-size: 14px;
+      color: var(--text-dim);
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+
+    /* =====================================================
+       FIREBASE SETUP SCREEN
+       ===================================================== */
+    .instructions-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      margin-bottom: 16px;
+      font-family: inherit;
+    }
+
+    .instructions-toggle:hover { color: var(--text); }
+
+    .instructions-toggle svg {
+      transition: transform var(--transition);
+    }
+
+    .instructions-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.7;
+    }
+
+    .instructions-block ol {
+      padding-left: 18px;
+    }
+
+    .instructions-block li {
+      margin-bottom: 6px;
+    }
+
+    .instructions-block a {
+      color: var(--accent);
+    }
+
+    .instructions-block code {
+      font-size: 12px;
+    }
+
+    .config-textarea {
+      width: 100%;
+      min-height: 160px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      padding: 14px;
+      resize: vertical;
+      outline: none;
+      transition: border-color var(--transition);
+      margin-bottom: 20px;
+    }
+
+    .config-textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .config-textarea::placeholder { color: var(--text-muted); }
+
+    /* =====================================================
+       SIGN IN SCREEN
+       ===================================================== */
+    .signin-lock-icon {
+      width: 72px;
+      height: 72px;
+      background: var(--surface2);
+      border-radius: var(--radius-xl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 36px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* =====================================================
+       FORM CONTROLS (shared across onboarding)
+       ===================================================== */
+    .field-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .text-input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      margin-bottom: 16px;
+    }
+
+    .text-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .text-input::placeholder { color: var(--text-muted); }
+
+    .field-group {
+      margin-bottom: 20px;
+    }
+
+    .field-group .text-input {
+      margin-bottom: 0;
+    }
+
+    /* =====================================================
+       PASSPHRASE STRENGTH METER
+       ===================================================== */
+    .strength-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 20px;
+    }
+
+    .strength-segs {
+      display: flex;
+      gap: 5px;
+      flex: 1;
+    }
+
+    .strength-seg {
+      height: 4px;
+      flex: 1;
+      border-radius: 2px;
+      background: var(--border);
+      transition: background 300ms ease;
+    }
+
+    #strength-label {
+      font-size: 12px;
+      font-weight: 600;
+      width: 48px;
+      text-align: right;
+    }
+
+    /* =====================================================
+       WARNING BOX
+       ===================================================== */
+    .warning-box {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--warning);
+      line-height: 1.5;
+      margin-bottom: 24px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .warning-box svg {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* =====================================================
+       BUTTONS
+       ===================================================== */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 15px 24px;
+      border-radius: var(--radius-full);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      outline: none;
+      transition: background var(--transition), transform 120ms ease,
+                  box-shadow var(--transition), opacity var(--transition);
+      -webkit-user-select: none;
+      user-select: none;
+      letter-spacing: 0.01em;
+    }
+
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn:disabled:active { transform: none; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(139,92,246,0.3);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-dim);
+      box-shadow: 0 6px 20px rgba(139,92,246,0.4);
+    }
+
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.18);
+    }
+
+    .btn-google {
+      background: var(--surface);
+      color: var(--text);
+      border: 1.5px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 15px 28px;  /* extra horizontal padding so the G logo is never clipped */
+    }
+
+    .btn-google:hover:not(:disabled) {
+      background: var(--surface2);
+      border-color: var(--border2);
+    }
+
+    .btn + .btn {
+      margin-top: 10px;
+    }
+
+    .btn-sm {
+      padding: 10px 20px;
+      font-size: 14px;
+    }
+
+    /* =====================================================
+       PIN PAD  (shared by setup and lock screens)
+       ===================================================== */
+    .pin-display {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+
+    .pin-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border2);
+      transition: background 180ms ease, border-color 180ms ease,
+                  transform 160ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    .pin-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.15);
+    }
+
+    /* Pin dots for the setup screen — same visual as lock screen */
+    .pin-setup-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border2);
+      transition: background 180ms ease, border-color 180ms ease,
+                  transform 160ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    .pin-setup-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.15);
+    }
+
+    .pin-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    .pin-key {
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 22px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background var(--transition), transform 100ms ease,
+                  border-color var(--transition);
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    .pin-key:active {
+      background: var(--surface3);
+      border-color: var(--accent);
+      transform: scale(0.93);
+    }
+
+    .pin-key.key-empty {
+      background: transparent;
+      border-color: transparent;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .pin-key.key-back {
+      font-size: 20px;
+      color: var(--text-dim);
+    }
+
+    .pin-key.key-back:active {
+      color: var(--danger);
+    }
+
+    /* Keyboard invoke button */
+    .keyboard-btn {
+      margin-top: 24px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--surface);
+      border: 1.5px solid var(--border2);
+      border-radius: var(--radius-full);
+      color: var(--text-dim);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+    }
+    .keyboard-btn:hover { background: var(--surface2); color: var(--text); }
+    .keyboard-btn:active { transform: scale(0.96); }
+
+    /* Shake animation for wrong PIN */
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      15%       { transform: translateX(-10px); }
+      30%       { transform: translateX(10px); }
+      45%       { transform: translateX(-8px); }
+      60%       { transform: translateX(8px); }
+      75%       { transform: translateX(-4px); }
+      90%       { transform: translateX(4px); }
+    }
+
+    .shake { animation: shake 480ms cubic-bezier(0.36,0.07,0.19,0.97); }
+
+    /* =====================================================
+       BIOMETRICS SCREEN
+       ===================================================== */
+    .bio-icon-wrap {
+      width: 80px;
+      height: 80px;
+      background: var(--surface2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 40px;
+      box-shadow: 0 0 32px var(--accent-glow);
+    }
+
+    /* =====================================================
+       LOCK SCREEN
+       ===================================================== */
+    #s-lock {
+      background: var(--bg);
+    }
+
+    .lock-inner {
+      width: 100%;
+      max-width: var(--max-w);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 64px 32px 40px;
+      flex: 1;
+    }
+
+    .lock-avatar {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 30px;
+      color: #fff;
+      margin-bottom: 14px;
+      box-shadow: 0 0 28px var(--accent-glow), var(--shadow);
+    }
+
+    .lock-email {
+      font-size: 14px;
+      color: var(--text-dim);
+      margin-bottom: 48px;
+      text-align: center;
+    }
+
+    .lock-prompt {
+      font-family: 'Syne', sans-serif;
+      font-weight: 600;
+      font-size: 18px;
+      color: var(--text);
+      margin-bottom: 28px;
+      text-align: center;
+    }
+
+    #pin-dots-row {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+
+    .lock-bio-hint {
+      margin-top: 20px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .bio-btn {
+      margin-top: 16px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--accent);
+      font-size: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition), transform 120ms ease;
+    }
+
+    .bio-btn:active { transform: scale(0.93); }
+
+    /* =====================================================
+       APP SCREEN — Main Chat
+       ===================================================== */
+    #s-app {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 0;
+      align-items: stretch;
+    }
+
+    /* Header */
+    .app-header {
+      position: relative;
+      z-index: 10;
+      height: var(--header-h);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      padding-top: env(safe-area-inset-top, 0);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .header-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      color: #fff;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 150ms ease, box-shadow 150ms ease;
+    }
+
+    .header-avatar:hover {
+      transform: scale(1.06);
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .header-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .header-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 17px;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    /* Status dot in header */
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--online);
+      flex-shrink: 0;
+      transition: background 400ms ease;
+    }
+
+    .status-dot.offline { background: var(--text-muted); }
+
+    .header-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+    }
+
+    .icon-btn:hover { background: var(--surface2); color: var(--text); }
+    .icon-btn:active { background: var(--surface3); }
+
+    /* Messages list */
+    .messages-list {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      scroll-behavior: smooth;
+    }
+
+    .messages-list::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    .messages-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .messages-list::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 3px;
+    }
+
+    /* Date separator */
+    .date-sep {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 16px 0 8px;
+    }
+
+    .date-sep::before,
+    .date-sep::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .date-sep span {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    /* Message rows */
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 2px;
+      width: 100%;   /* must be full width for alignment to work */
+    }
+
+    .msg-row.own {
+      align-items: flex-end;
+    }
+
+    .msg-row.other {
+      align-items: flex-start;
+    }
+
+    .msg-device {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      margin-left: 12px;
+    }
+
+    /* Bubbles */
+    .msg-bubble {
+      max-width: min(75%, 340px);
+      padding: 9px 13px;
+      border-radius: var(--radius-lg);
+      word-break: break-word;
+      font-size: 14.5px;
+      line-height: 1.55;
+      cursor: pointer;
+      position: relative;
+      transition: transform 100ms ease;
+    }
+
+    .msg-bubble:active { transform: scale(0.98); }
+
+    .msg-row.own .msg-bubble {
+      background: var(--own-bg);
+      color: var(--own-text);
+      border-bottom-right-radius: var(--radius-xs);
+    }
+
+    .msg-row.other .msg-bubble {
+      background: var(--other-bg);
+      color: var(--other-text);
+      border-bottom-left-radius: var(--radius-xs);
+      border: 1px solid var(--border);
+    }
+
+    .msg-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .msg-time {
+      font-size: 11px;
+      opacity: 0.65;
+      /* Always visible — tap bubble to toggle if needed */
+    }
+
+    .read-tick {
+      font-size: 12px;
+      opacity: 0.6;
+      letter-spacing: -3px;
+    }
+
+    .read-tick.read {
+      opacity: 1;
+      color: var(--online);
+    }
+
+    .deleted-text {
+      font-size: 13px;
+      font-style: italic;
+      opacity: 0.55;
+    }
+
+    .decrypt-error {
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    /* Consecutive messages from same device — tighten spacing */
+    .msg-row + .msg-row.own,
+    .msg-row + .msg-row.other {
+      margin-top: 1px;
+    }
+
+    /* Empty state */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 32px;
+      text-align: center;
+      gap: 12px;
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      margin-bottom: 4px;
+    }
+
+    .empty-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--text);
+    }
+
+    .empty-sub {
+      font-size: 14px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* Typing indicator */
+    .typing-indicator {
+      padding: 6px 16px;
+      font-size: 13px;
+      color: var(--text-dim);
+      font-style: italic;
+      min-height: 28px;
+      flex-shrink: 0;
+    }
+
+    /* Input area */
+    .input-area {
+      flex-shrink: 0;
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 10px 12px;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+
+    .msg-input {
+      flex: 1;
+      min-height: 42px;
+      max-height: 120px;
+      padding: 10px 14px;
+      background: var(--bg-alt);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-xl);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      resize: none;
+      outline: none;
+      overflow-y: auto;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .msg-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .msg-input::placeholder { color: var(--text-muted); }
+
+    .msg-input::-webkit-scrollbar { width: 0; }
+
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background var(--transition), transform 120ms ease,
+                  box-shadow var(--transition);
+      box-shadow: 0 2px 10px rgba(139,92,246,0.35);
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: var(--accent-dim);
+      box-shadow: 0 4px 16px rgba(139,92,246,0.5);
+    }
+
+    .send-btn:active:not(:disabled) { transform: scale(0.9); }
+    .send-btn:disabled { background: var(--border2); box-shadow: none; cursor: not-allowed; }
+
+    /* =====================================================
+       OVERLAYS (accounts, settings)
+       ===================================================== */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      animation: overlay-in 260ms ease forwards;
+    }
+
+    @keyframes overlay-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    .overlay-panel {
+      background: var(--surface);
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      border-top: 1px solid var(--border);
+      max-height: 88vh;
+      overflow-y: auto;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+      animation: panel-up 280ms cubic-bezier(0.32,0.72,0,1) forwards;
+    }
+
+    @keyframes panel-up {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+
+    .overlay-panel::-webkit-scrollbar { width: 0; }
+
+    .overlay-handle {
+      width: 36px;
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      margin: 12px auto 4px;
+    }
+
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .overlay-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--text);
+    }
+
+    /* Account list */
+    .account-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 20px;
+      cursor: pointer;
+      transition: background var(--transition);
+      position: relative;
+    }
+
+    .account-row:hover { background: var(--surface2); }
+    .account-row:active { background: var(--surface3); }
+
+    .account-row.current {
+      background: var(--accent-glow);
+    }
+
+    .account-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .account-info { flex: 1; min-width: 0; }
+    .account-name {
+      font-weight: 600;
+      font-size: 14.5px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .account-email {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .account-device {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .account-current-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--accent-glow);
+      border-radius: var(--radius-full);
+      padding: 3px 10px;
+    }
+
+    .overlay-footer {
+      padding: 12px 20px 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Settings panel */
+    .settings-section {
+      padding: 20px 20px 0;
+    }
+
+    .settings-section-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .settings-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+
+    .settings-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      padding: 7px 10px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .settings-text-input {
+      flex: 1;
+      padding: 9px 12px;
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+
+    .settings-text-input:focus { border-color: var(--accent); }
+
+    /* Theme grid */
+    .theme-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .theme-swatch {
+      border: 2px solid transparent;
+      border-radius: var(--radius-md);
+      padding: 10px 8px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      transition: transform 150ms ease, border-color 150ms ease;
+      outline: none;
+    }
+
+    .theme-swatch:hover { transform: scale(1.04); }
+
+    .theme-swatch.active {
+      border-color: var(--accent) !important;
+    }
+
+    .swatch-bubble {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+    }
+
+    .swatch-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .settings-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 8px 0 20px;
+    }
+
+    /* =====================================================
+       TOAST NOTIFICATION
+       ===================================================== */
+    #toast {
+      position: fixed;
+      bottom: calc(80px + env(safe-area-inset-bottom, 0));
+      left: 50%;
+      transform: translateX(-50%) translateY(16px);
+      background: var(--surface3);
+      color: var(--text);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius-full);
+      padding: 10px 20px;
+      font-size: 13.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      max-width: calc(100vw - 48px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      z-index: 9999;
+      opacity: 0;
+      pointer-events: none;
+      box-shadow: var(--shadow);
+      transition: opacity 220ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* =====================================================
+       PWA INSTALL BUTTON (floating)
+       ===================================================== */
+    #install-btn-wrap {
+      position: fixed;
+      bottom: calc(90px + env(safe-area-inset-bottom, 0));
+      right: 20px;
+      z-index: 50;
+    }
+
+    #install-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: var(--surface);
+      border: 1.5px solid var(--border2);
+      border-radius: var(--radius-full);
+      color: var(--text-dim);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: background var(--transition), color var(--transition);
+    }
+
+    #install-btn:hover {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    /* =====================================================
+       MEDIA MESSAGES
+       ===================================================== */
+    .media-bubble { cursor: pointer; border-radius: var(--radius-md); overflow: hidden; max-width: 280px; }
+    .media-placeholder {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 8px; padding: 20px; background: var(--surface3); border-radius: var(--radius-md);
+      color: var(--text-dim); font-size: 13px; min-width: 140px; cursor: pointer;
+    }
+    .msg-thumb {
+      display: block; width: 100%; max-width: 280px; max-height: 320px;
+      object-fit: cover; border-radius: var(--radius-md); cursor: pointer;
+      transition: opacity 150ms ease;
+    }
+    .msg-thumb:hover { opacity: 0.9; }
+    .media-caption { font-size: 12px; color: var(--text-dim); padding: 4px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+    .media-file {
+      display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+      background: var(--surface3); border-radius: var(--radius-md); cursor: pointer;
+      transition: background var(--transition); min-width: 200px;
+    }
+    .media-file:hover { background: var(--border); }
+    .file-icon { font-size: 28px; flex-shrink: 0; }
+    .file-info { flex: 1; min-width: 0; }
+    .file-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+    .file-download-icon { color: var(--accent); flex-shrink: 0; }
+    /* Lightbox */
+    #media-lightbox { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; }
+    .lb-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); }
+    .lb-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; max-width: 95vw; max-height: 95vh; }
+    .lb-close { position: absolute; top: -40px; right: 0; background: none; border: none; color: #fff; font-size: 32px; cursor: pointer; line-height: 1; padding: 4px 8px; }
+    #lb-img { max-width: 95vw; max-height: 85vh; object-fit: contain; border-radius: var(--radius-md); }
+    .lb-title { margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 13px; }
+    /* Attach button */
+    .attach-btn {
+      width: 42px; height: 42px; border-radius: 50%; background: var(--surface2);
+      border: 1.5px solid var(--border); color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      flex-shrink: 0; transition: background var(--transition), color var(--transition);
+    }
+    .attach-btn:hover { background: var(--surface3); color: var(--text); }
+    .attach-btn:active { transform: scale(0.92); }
+    .attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Storage settings */
+    .storage-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .storage-row:last-child { border-bottom: none; }
+    .storage-account-info { flex: 1; min-width: 0; }
+    .storage-email { font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .storage-bar-wrap { height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 5px; overflow: hidden; }
+    .storage-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 400ms ease; }
+    .storage-numbers { font-size: 11.5px; color: var(--text-dim); }
+    .storage-reauth { color: var(--warning); font-weight: 600; }
+    .storage-empty { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
+    .btn-remove-drive { width: 28px; height: 28px; border-radius: 50%; background: rgba(239,68,68,0.1); border: none; color: var(--danger); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background var(--transition); }
+    .btn-remove-drive:hover { background: rgba(239,68,68,0.2); }
+
+    /* =====================================================
+       DESKTOP CENTERING
+       ===================================================== */
+    @media (min-width: 600px) {
+      .screen-onboard {
+        padding: 60px 32px;
+      }
+    }
+
+    /* Desktop: give the chat room to breathe */
+    @media (min-width: 900px) {
+      #s-app {
+        display: grid;
+        grid-template-rows: var(--header-h) 1fr auto auto;
+        grid-template-columns: 1fr min(var(--max-w-desktop), 100%) 1fr;
+        align-items: stretch;
+        background: var(--bg-alt);
+      }
+
+      .app-header {
+        grid-column: 1 / -1;
+        display: flex;
+        justify-content: center;
+        padding: 0 0;
+      }
+
+      .app-header > * {
+        max-width: var(--max-w-desktop);
+        width: 100%;
+        display: contents;
+      }
+
+      /* Re-apply header internals properly */
+      .app-header {
+        gap: 0;
+        padding: 0;
+      }
+
+      .messages-list {
+        grid-column: 2;
+        padding: 20px 28px;
+        background: var(--bg);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+      }
+
+      .typing-indicator {
+        grid-column: 2;
+        background: var(--bg);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        padding: 6px 28px;
+      }
+
+      .input-area {
+        grid-column: 2;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        border-right: 1px solid var(--border);
+        padding: 12px 20px;
+      }
+
+      #install-btn-wrap {
+        bottom: 100px;
+        right: calc(50% - var(--max-w-desktop)/2 - 70px);
+      }
+
+      .overlay-panel {
+        border-radius: var(--radius-xl);
+        margin-bottom: 40px;
+        width: 100%;
+        max-width: 480px;
+        align-self: flex-end;
+        margin-right: auto;
+        margin-left: auto;
+      }
+
+      /* Wider message bubbles on desktop */
+      .msg-bubble {
+        max-width: min(65%, 520px);
+      }
+    }
+
+    /* Simple centering for 600-899px (tablet range) */
+    @media (min-width: 600px) and (max-width: 899px) {
+      .messages-list {
+        padding: 16px 20px;
+      }
+    }
+
+    /* =====================================================
+       MISC ANIMATIONS
+       ===================================================== */
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-in { animation: fade-in 280ms ease forwards; }
+
+    /* Message entrance */
+    .msg-row {
+      animation: fade-in 200ms ease forwards;
+    }
+
+    /* Glow pulse for lock screen biometrics button */
+    @keyframes bio-glow {
+      0%, 100% { box-shadow: 0 0 12px var(--accent-glow); }
+      50%       { box-shadow: 0 0 28px var(--accent-glow), 0 0 48px var(--accent-glow); }
+    }
+
+    .bio-btn:not(.hidden) {
+      animation: bio-glow 2.4s ease-in-out infinite;
+    }
+
+    /* =====================================================
+       SAFE AREA PADDING for very tall screens
+       ===================================================== */
+    #s-lock {
+      padding-top: env(safe-area-inset-top, 0);
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       SCREEN: LOADING
+       ============================================================ -->
+  <div id="s-loading" class="screen screen-active">
+    <div class="loading-logo">
+      <span class="loading-logo-letter">N</span>
+    </div>
+    <div id="loading-msg">Starting…</div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: WELCOME
+       ============================================================ -->
+  <div id="s-welcome" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="welcome-logo-wrap">
+        <div class="welcome-logo">
+          <span class="welcome-logo-letter">N</span>
+        </div>
+      </div>
+      <div class="welcome-title">Nexus</div>
+      <div class="welcome-sub">Your private, end-to-end encrypted<br>personal messenger</div>
+
+      <div class="feature-list">
+        <div class="feature-item">
+          <div class="feature-icon">&#128274;</div>
+          <div class="feature-text">
+            <strong>End-to-End Encrypted</strong>
+            <span>AES-256 on your device. Firebase sees only ciphertext.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#128241;</div>
+          <div class="feature-text">
+            <strong>All Your Devices</strong>
+            <span>Syncs in real time across phone, tablet, and desktop.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#127760;</div>
+          <div class="feature-text">
+            <strong>Your Own Server</strong>
+            <span>Uses your personal Firebase project — no shared servers.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#128268;</div>
+          <div class="feature-text">
+            <strong>Works Offline</strong>
+            <span>Messages queue locally and send when you reconnect.</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="get-started-btn" class="btn btn-primary">Get Started</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: FIREBASE CONFIG
+       ============================================================ -->
+  <div id="s-firebase" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="onboard-heading">Connect Firebase</div>
+      <div class="onboard-sub">
+        Nexus stores your encrypted messages in your own Firebase Realtime Database.
+        You own the data — we never touch it.
+      </div>
+
+      <button id="firebase-instructions-toggle" class="instructions-toggle">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="7.5" stroke="currentColor"/>
+          <path d="M8 7v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
+        </svg>
+        How to get my Firebase config
+      </button>
+
+      <div id="firebase-instructions" class="instructions-block hidden">
+        <ol>
+          <li>Go to <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a></li>
+          <li>Create a new project (or open an existing one)</li>
+          <li>Click <strong>Add app</strong> and choose <strong>Web (&lt;/&gt;)</strong></li>
+          <li>Register the app — you can skip Firebase Hosting</li>
+          <li>Copy the <code>firebaseConfig</code> object shown on screen</li>
+          <li>In the left sidebar, go to <strong>Build → Realtime Database</strong></li>
+          <li>Click <strong>Create Database</strong>, choose a region, start in <strong>locked mode</strong></li>
+          <li>Go to <strong>Rules</strong> and paste:
+            <br><br>
+            <code>{ "rules": { "accounts": { "$uid": { ".read": "$uid === auth.uid", ".write": "$uid === auth.uid" } } } }</code>
+            <br><br>
+            Then click <strong>Publish</strong>
+          </li>
+          <li>In <strong>Authentication → Sign-in method</strong>, enable <strong>Google</strong></li>
+          <li>Paste your config below</li>
+        </ol>
+      </div>
+
+      <textarea
+        id="firebase-config-input"
+        class="config-textarea"
+        placeholder='{
+  "apiKey": "AIza...",
+  "authDomain": "your-app.firebaseapp.com",
+  "databaseURL": "https://your-app-default-rtdb.firebaseio.com",
+  "projectId": "your-app",
+  "storageBucket": "your-app.appspot.com",
+  "messagingSenderId": "123456789",
+  "appId": "1:123..."
+}'
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+      ></textarea>
+
+      <button id="firebase-next-btn" class="btn btn-primary">Connect &amp; Continue</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: SIGN IN
+       ============================================================ -->
+  <div id="s-signin" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128274;</div>
+      <div class="onboard-heading" style="text-align:center">Sign In</div>
+      <div class="onboard-sub" style="text-align:center">
+        Sign in with Google to sync your encrypted messages across devices.
+        Nexus also requests Google Drive access for media storage in a future update.
+      </div>
+
+      <button id="signin-btn" class="btn btn-google">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+        </svg>
+        Continue with Google
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PASSPHRASE SETUP (new account, first device)
+       ============================================================ -->
+  <div id="s-passphrase-setup" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="onboard-heading">Create Passphrase</div>
+      <div class="onboard-sub">
+        This passphrase encrypts all your messages with AES-256 before they reach Firebase.
+        It is never sent anywhere — only you know it.
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="passphrase-1">Passphrase</label>
+        <input
+          id="passphrase-1"
+          type="password"
+          class="text-input"
+          placeholder="Enter a strong passphrase"
+          autocomplete="new-password"
+        >
+        <div class="strength-row">
+          <div class="strength-segs">
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+          </div>
+          <span id="strength-label"></span>
+        </div>
+      </div>
+
+      <div class="field-group" style="margin-bottom:20px">
+        <label class="field-label" for="passphrase-2">Confirm Passphrase</label>
+        <input
+          id="passphrase-2"
+          type="password"
+          class="text-input"
+          placeholder="Repeat your passphrase"
+          autocomplete="new-password"
+        >
+      </div>
+
+      <div class="warning-box">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1L15.5 14H.5L8 1z" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 6v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="8" cy="12" r="0.8" fill="currentColor"/>
+        </svg>
+        <span>There is no recovery option. If you forget this passphrase, your messages cannot be decrypted.</span>
+      </div>
+
+      <button id="passphrase-setup-btn" class="btn btn-primary">Set Passphrase</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PASSPHRASE ENTRY (existing account, new device)
+       ============================================================ -->
+  <div id="s-passphrase-entry" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128272;</div>
+      <div class="onboard-heading" style="text-align:center">New Device</div>
+      <div class="onboard-sub" style="text-align:center">
+        Enter your encryption passphrase to decrypt your messages on this device.
+        This is the passphrase you set when you first created your account.
+      </div>
+
+      <div class="field-group" style="margin-bottom:24px">
+        <label class="field-label" for="passphrase-entry-input">Encryption Passphrase</label>
+        <input
+          id="passphrase-entry-input"
+          type="password"
+          class="text-input"
+          placeholder="Your encryption passphrase"
+          autocomplete="current-password"
+        >
+      </div>
+
+      <button id="passphrase-entry-btn" class="btn btn-primary">Decrypt &amp; Continue</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PIN SETUP
+       ============================================================ -->
+  <div id="s-pin-setup" class="screen hidden">
+    <div style="width:100%;max-width:var(--max-w);padding:56px 32px 40px;display:flex;flex-direction:column;align-items:center;flex:1">
+      <div class="onboard-heading" style="text-align:center;margin-bottom:6px">Set Up Lock</div>
+      <p id="pin-setup-prompt" style="font-size:15px;color:var(--text-dim);text-align:center;margin-bottom:40px">
+        Create a 6-digit PIN
+      </p>
+
+      <div id="pin-setup-dots-row" class="pin-display" style="margin-bottom:44px">
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+      </div>
+
+      <!-- Tap to type button -->
+      <button id="setup-keyboard-btn" class="keyboard-btn" style="margin-bottom:16px">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <rect x="1" y="4" width="14" height="8" rx="1.5"/>
+          <path d="M4 7h1M7.5 7h1M11 7h1M4 10h8" stroke-linecap="round"/>
+        </svg>
+        Tap to type PIN
+      </button>
+
+      <!-- Hidden input for keyboard entry -->
+      <input
+        id="setup-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="off"
+        aria-label="Enter PIN"
+        style="position:fixed;opacity:0;width:1px;height:1px;top:50%;left:50%;pointer-events:none;"
+      >
+
+      <!-- Desktop hint -->
+      <div id="setup-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (mobile only) -->
+      <div id="setup-numpad" class="pin-grid">
+        <button class="pin-key pin-setup-key" data-val="1">1</button>
+        <button class="pin-key pin-setup-key" data-val="2">2</button>
+        <button class="pin-key pin-setup-key" data-val="3">3</button>
+        <button class="pin-key pin-setup-key" data-val="4">4</button>
+        <button class="pin-key pin-setup-key" data-val="5">5</button>
+        <button class="pin-key pin-setup-key" data-val="6">6</button>
+        <button class="pin-key pin-setup-key" data-val="7">7</button>
+        <button class="pin-key pin-setup-key" data-val="8">8</button>
+        <button class="pin-key pin-setup-key" data-val="9">9</button>
+        <button class="pin-key key-empty" disabled aria-hidden="true"></button>
+        <button class="pin-key pin-setup-key" data-val="0">0</button>
+        <button class="pin-key pin-setup-key key-back" data-val="back" aria-label="Delete">&#9003;</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: BIOMETRICS SETUP
+       ============================================================ -->
+  <div id="s-biometrics-setup" class="screen screen-onboard hidden">
+    <div class="onboard-inner" style="text-align:center">
+      <div class="bio-icon-wrap">&#128400;</div>
+      <div class="onboard-heading">Biometric Lock</div>
+
+      <!-- Shown when biometrics are available -->
+      <div id="bio-setup-available">
+        <div class="onboard-sub">
+          Use your fingerprint or face to unlock Nexus instantly.
+          Your biometric data stays on this device — Nexus never sees it.
+        </div>
+        <button id="bio-setup-btn" class="btn btn-primary" style="margin-bottom:10px">
+          Enable Biometrics
+        </button>
+        <button id="bio-skip-btn" class="btn btn-ghost">Skip for Now</button>
+      </div>
+
+      <!-- Shown when biometrics are unavailable -->
+      <div id="bio-setup-unavailable" class="hidden">
+        <div class="onboard-sub">
+          Biometrics are not available on this device or browser.
+          You can always use your PIN to unlock.
+        </div>
+        <button id="bio-skip-btn-2" class="btn btn-primary">Continue with PIN</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: DEVICE NAME
+       ============================================================ -->
+  <div id="s-device-name" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128241;</div>
+      <div class="onboard-heading" style="text-align:center">Name This Device</div>
+      <div class="onboard-sub" style="text-align:center">
+        This name appears next to your messages so you know which device sent them.
+        You can change it anytime in settings.
+      </div>
+
+      <div class="field-group" style="margin-bottom:28px">
+        <label class="field-label" for="device-name-input">Device Name</label>
+        <input
+          id="device-name-input"
+          type="text"
+          class="text-input"
+          placeholder="My Phone"
+          autocomplete="off"
+          maxlength="40"
+        >
+      </div>
+
+      <button id="device-name-done-btn" class="btn btn-primary">Start Messaging</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: LOCK
+       ============================================================ -->
+  <div id="s-lock" class="screen hidden" style="justify-content:center;align-items:center">
+    <div class="lock-inner">
+      <div id="lock-avatar" class="lock-avatar">?</div>
+      <div id="lock-email" class="lock-email">Loading…</div>
+
+      <div class="lock-prompt">Enter PIN to unlock</div>
+
+      <div id="pin-dots-row">
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+      </div>
+
+      <!-- Hidden input — receives keyboard typing on desktop,
+           triggers numeric system keyboard on mobile -->
+      <input
+        id="lock-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="one-time-code"
+        aria-label="Enter PIN"
+        style="position:fixed;opacity:0;width:1px;height:1px;top:50%;left:50%;pointer-events:none;"
+      >
+
+      <!-- Desktop hint (shown instead of numpad) -->
+      <div id="lock-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (shown on mobile, hidden on desktop) -->
+      <div id="lock-numpad" class="pin-grid">
+        <button class="pin-key pin-lock-key" data-val="1">1</button>
+        <button class="pin-key pin-lock-key" data-val="2">2</button>
+        <button class="pin-key pin-lock-key" data-val="3">3</button>
+        <button class="pin-key pin-lock-key" data-val="4">4</button>
+        <button class="pin-key pin-lock-key" data-val="5">5</button>
+        <button class="pin-key pin-lock-key" data-val="6">6</button>
+        <button class="pin-key pin-lock-key" data-val="7">7</button>
+        <button class="pin-key pin-lock-key" data-val="8">8</button>
+        <button class="pin-key pin-lock-key" data-val="9">9</button>
+        <button class="pin-key key-empty" disabled aria-hidden="true"></button>
+        <button class="pin-key pin-lock-key" data-val="0">0</button>
+        <button class="pin-key pin-lock-key key-back" data-val="back" aria-label="Delete">&#9003;</button>
+      </div>
+
+      <!-- Tap to type button -->
+      <button id="lock-keyboard-btn" class="keyboard-btn">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <rect x="1" y="4" width="14" height="8" rx="1.5"/>
+          <path d="M4 7h1M7.5 7h1M11 7h1M4 10h8" stroke-linecap="round"/>
+        </svg>
+        Tap to type PIN
+      </button>
+
+      <!-- Biometrics button -->
+      <button id="lock-bio-btn" class="bio-btn hidden" aria-label="Unlock with biometrics">
+        &#128400;
+      </button>
+      <div id="lock-bio-hint" class="lock-bio-hint hidden">
+        Or use fingerprint / face to unlock
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: APP (Chat)
+       ============================================================ -->
+  <div id="s-app" class="screen hidden">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div id="header-avatar" class="header-avatar" title="Switch account">?</div>
+
+      <div class="header-info">
+        <div class="header-title-row">
+          <span id="header-title" class="header-title">Nexus</span>
+          <span id="status-dot" class="status-dot" title="Connected"></span>
+        </div>
+        <div id="header-sub" class="header-sub hidden"></div>
+      </div>
+
+      <div class="header-actions">
+        <button id="header-settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="10" cy="10" r="2.5"/>
+            <path d="M10 2.5v1M10 16.5v1M2.5 10h1M16.5 10h1M4.7 4.7l.7.7M14.6 14.6l.7.7M4.7 15.3l.7-.7M14.6 5.4l.7-.7"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Messages -->
+    <div id="messages-list" class="messages-list">
+      <div class="empty-state">
+        <div class="empty-icon">&#128274;</div>
+        <div class="empty-title">No messages yet</div>
+        <div class="empty-sub">Messages are encrypted end-to-end.<br>Only your devices can read them.</div>
+      </div>
+    </div>
+
+    <!-- Typing indicator -->
+    <div id="typing-indicator" class="typing-indicator hidden"></div>
+
+    <!-- Input area -->
+    <div class="input-area">
+      <!-- Hidden file input -->
+      <input id="file-input" type="file"
+             accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+             style="display:none" aria-hidden="true">
+      <!-- Attach button -->
+      <button id="attach-btn" class="attach-btn" title="Send file" aria-label="Attach file">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M15.5 8.5l-7 7a4.5 4.5 0 0 1-6.364-6.364l7-7a3 3 0 0 1 4.243 4.243l-7 7a1.5 1.5 0 0 1-2.121-2.121l6.293-6.293"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <textarea
+        id="msg-input"
+        class="msg-input"
+        placeholder="Message"
+        rows="1"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="sentences"
+        spellcheck="true"
+      ></textarea>
+      <button id="send-btn" class="send-btn" title="Send (Enter)" aria-label="Send">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M16 9L2 2l2.5 7L2 16l14-7z" fill="white"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- PWA install -->
+    <div id="install-btn-wrap" class="hidden">
+      <button id="install-btn">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Install App
+      </button>
+    </div>
+
+  </div><!-- end #s-app -->
+
+
+  <!-- ============================================================
+       OVERLAY: ACCOUNT SWITCHER
+       ============================================================ -->
+  <div id="overlay-accounts" class="overlay hidden">
+    <div class="overlay-panel">
+      <div class="overlay-handle"></div>
+      <div class="overlay-header">
+        <span class="overlay-title">Accounts</span>
+        <button id="account-overlay-close" class="icon-btn" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4l10 10M14 4L4 14" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="account-list">
+        <!-- Populated by app.js -->
+      </div>
+
+      <div class="overlay-footer">
+        <button id="add-account-btn" class="btn btn-ghost btn-sm">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="8" cy="8" r="7"/>
+            <path d="M8 5v6M5 8h6" stroke-linecap="round"/>
+          </svg>
+          Add Account
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       OVERLAY: SETTINGS
+       ============================================================ -->
+  <div id="overlay-settings" class="overlay hidden">
+    <div class="overlay-panel">
+      <div class="overlay-handle"></div>
+      <div class="overlay-header">
+        <span class="overlay-title">Settings</span>
+        <button id="settings-close-btn" class="icon-btn" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4l10 10M14 4L4 14" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Theme -->
+      <div class="settings-section">
+        <div class="settings-section-title">Theme</div>
+        <div id="theme-grid" class="theme-grid">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Device -->
+      <div class="settings-section">
+        <div class="settings-section-title">This Device</div>
+        <div class="settings-row">
+          <label for="settings-device-name">Device Name</label>
+          <input
+            id="settings-device-name"
+            type="text"
+            class="settings-text-input"
+            placeholder="My Phone"
+            maxlength="40"
+            autocomplete="off"
+          >
+        </div>
+        <div class="settings-row">
+          <label for="settings-autolock">Auto-Lock</label>
+          <select id="settings-autolock" class="settings-select">
+            <option value="0">Never</option>
+            <option value="1">1 minute</option>
+            <option value="5" selected>5 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+          </select>
+        </div>
+        <div style="margin-bottom:16px">
+          <button id="settings-bio-setup-btn" class="btn btn-ghost btn-sm">
+            &#128400; Setup Biometrics
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Storage / Spine Link -->
+      <div class="settings-section">
+        <div class="settings-section-title">Storage (Spine Link)</div>
+        <div id="storage-summary" style="margin-bottom:14px">
+          <div class="storage-empty">Loading…</div>
+        </div>
+        <button id="settings-add-drive-btn" class="btn btn-ghost btn-sm" style="margin-bottom:4px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="7" cy="7" r="6"/>
+            <path d="M7 4v6M4 7h6" stroke-linecap="round"/>
+          </svg>
+          Add Drive Account
+        </button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Account -->
+      <div class="settings-section" style="padding-bottom:24px">
+        <div class="settings-section-title">Account</div>
+        <button id="settings-signout-btn" class="btn btn-danger btn-sm">
+          Sign Out
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       TOAST
+       ============================================================ -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+
+  <!-- ============================================================
+       SCRIPTS
+       Firebase SDK loads as ES modules; app.js imports from them.
+       ============================================================ -->
+  <script type="module" src="./src/app.js"></script>
+
+  <!-- Tiny inline fix: wire up the second bio-skip button
+       (the "Continue with PIN" button in the unavailable state) -->
+  <script type="module">
+    document.getElementById('bio-skip-btn-2')?.addEventListener('click', () => {
+      document.getElementById('s-device-name')?.classList.remove('hidden');
+      // The proper showScreen in app.js isn't accessible here directly,
+      // so we dispatch a custom event that app.js can react to, or just
+      // reuse the skip handler wired to bio-skip-btn.
+      document.getElementById('bio-skip-btn')?.click();
+    });
+  </script>
+
+</body>
+</html>
