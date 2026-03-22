@@ -216,15 +216,20 @@ async function showLockScreen() {
   clearPINDisplay();
   showScreen('s-lock');
 
-  // Desktop: hide on-screen numpad, focus the hidden keyboard input.
-  // Mobile: show numpad, hidden input still triggers system number keyboard.
-  const mobile = isMobileDevice();
+  // Always hide the on-screen numpad — use native keyboard on all platforms.
+  // On mobile the hidden input (inputmode=numeric) triggers the system number keyboard.
+  // Tapping anywhere on the lock screen re-focuses the input.
   const numpad = $('lock-numpad');
   const hint   = $('lock-keyboard-hint');
-  if (numpad) numpad.classList.toggle('hidden', !mobile);
-  if (hint)   hint.classList.toggle('hidden',   mobile);
+  if (numpad) numpad.classList.add('hidden');
+  if (hint)   hint.classList.remove('hidden');
   const inp = $('lock-pin-input');
   if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 350); }
+
+  // Tapping anywhere on the PIN dots area re-focuses the hidden input
+  $('pin-dots-row')?.addEventListener('click', () => {
+    $('lock-pin-input')?.focus();
+  }, { once: false });
 
   // Auto-trigger biometrics
   if (bioAvail && bioEnabled) {
@@ -634,7 +639,9 @@ function renderTypingIndicator() {
     // Fall back to presence map name, then a generic label.
     const dev = S.devices[did];
     const pres = S.presenceMap[did];
-    return dev?.name ?? pres?.deviceName ?? 'Another device';
+    // Presence deviceName is set on every app open so it reflects
+    // the current name. Device record name can be stale from initial setup.
+    return pres?.deviceName ?? dev?.name ?? 'Another device';
   });
 
   el.textContent =
@@ -1061,11 +1068,11 @@ function initPINSetupScreen() {
   updatePINSetupDots();
   const prompt = $('pin-setup-prompt');
   if (prompt) prompt.textContent = 'Create a 6-digit PIN';
-  const mobile = isMobileDevice();
+  // Always hide on-screen numpad — native keyboard on all platforms
   const numpad = $('setup-numpad');
   const hint   = $('setup-keyboard-hint');
-  if (numpad) numpad.classList.toggle('hidden', !mobile);
-  if (hint)   hint.classList.toggle('hidden',   mobile);
+  if (numpad) numpad.classList.add('hidden');
+  if (hint)   hint.classList.remove('hidden');
   const inp = $('setup-pin-input');
   if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 350); }
 }
