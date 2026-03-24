@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "User Profile",
+      "description": "Stores user's encryption salt, verification vector, and avatar.",
+      "type": "object",
+      "properties": {
+        "encryptionSalt": { "type": "string", "description": "Base64 encoded salt for key derivation." },
+        "verificationVector": { "type": "string", "description": "JSON string used to verify passphrase." },
+        "setupComplete": { "type": "boolean", "description": "Whether the user has completed initial setup." },
+        "createdAt": { "type": "number", "description": "Timestamp of account creation." },
+        "avatar": { "type": "object", "description": "Encrypted avatar data (ciphertext and iv)." }
+      },
+      "required": ["encryptionSalt", "verificationVector", "setupComplete", "createdAt"]
+    },
+    "Device": {
+      "title": "User Device",
+      "description": "Stores information about a user's registered device.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "User-defined name for the device." },
+        "platform": { "type": "string", "description": "Platform of the device (e.g., android, ios, web)." },
+        "addedAt": { "type": "number", "description": "Timestamp of when the device was added." },
+        "lastSeen": { "type": "number", "description": "Timestamp of when the device was last seen." }
+      },
+      "required": ["name", "platform", "addedAt", "lastSeen"]
+    },
+    "Message": {
+      "title": "Encrypted Message",
+      "description": "Stores an encrypted message and its metadata.",
+      "type": "object",
+      "properties": {
+        "ciphertext": { "type": "string", "description": "Encrypted message content." },
+        "iv": { "type": "string", "description": "Initialization vector for decryption." },
+        "type": { "type": "string", "description": "Type of message (e.g., text, image, file)." },
+        "deviceId": { "type": "string", "description": "ID of the sending device." },
+        "deviceName": { "type": "string", "description": "Name of the sending device." },
+        "timestamp": { "type": "number", "description": "Server timestamp of the message." },
+        "edited": { "type": "boolean", "description": "Whether the message has been edited." },
+        "editedAt": { "type": "number", "description": "Timestamp of the last edit." },
+        "deleted": { "type": "boolean", "description": "Whether the message has been soft-deleted." },
+        "pinned": { "type": "boolean", "description": "Whether the message is pinned." },
+        "replyTo": { "type": "string", "description": "ID of the message being replied to." },
+        "readBy": { "type": "object", "description": "Map of device IDs to read timestamps." },
+        "uuid": { "type": "string", "description": "UUID of the media file in Drive." },
+        "fileName": { "type": "string", "description": "Original name of the media file." },
+        "fileSize": { "type": "number", "description": "Size of the media file in bytes." },
+        "mimeType": { "type": "string", "description": "MIME type of the media file." },
+        "encThumb": { "type": "object", "description": "Encrypted thumbnail data." }
+      },
+      "required": ["ciphertext", "iv", "type", "deviceId", "deviceName", "timestamp"]
+    },
+    "TypingStatus": {
+      "title": "Typing Status",
+      "description": "Stores whether a device is currently typing.",
+      "type": "object",
+      "properties": {
+        "isTyping": { "type": "boolean", "description": "Whether the device is typing." },
+        "updatedAt": { "type": "number", "description": "Timestamp of the last update." }
+      },
+      "required": ["isTyping", "updatedAt"]
+    },
+    "Presence": {
+      "title": "User Presence",
+      "description": "Stores whether a device is currently online.",
+      "type": "object",
+      "properties": {
+        "online": { "type": "boolean", "description": "Whether the device is online." },
+        "lastSeen": { "type": "number", "description": "Timestamp of when the device was last seen." },
+        "deviceName": { "type": "string", "description": "Name of the device." }
+      },
+      "required": ["online", "lastSeen", "deviceName"]
+    },
+    "SpineConfig": {
+      "title": "Spine Configuration",
+      "description": "Stores the list of Drive accounts linked to the Nexus account.",
+      "type": "object",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "driveUid": { "type": "string" },
+              "email": { "type": "string" },
+              "cap": { "type": "number" },
+              "nexusUsed": { "type": "number" },
+              "folderId": { "type": "string" },
+              "addedAt": { "type": "number" },
+              "order": { "type": "number" }
+            }
+          }
+        }
+      },
+      "required": ["accounts"]
+    },
+    "MediaManifest": {
+      "title": "Media Manifest",
+      "description": "Stores metadata for a media file stored in Drive.",
+      "type": "object",
+      "properties": {
+        "driveUid": { "type": "string" },
+        "driveFileId": { "type": "string" },
+        "folderId": { "type": "string" },
+        "size": { "type": "number" },
+        "originalSize": { "type": "number" },
+        "mimeType": { "type": "string" },
+        "fileName": { "type": "string" },
+        "addedAt": { "type": "number" },
+        "status": { "type": "string", "enum": ["live", "missing"] }
+      },
+      "required": ["driveUid", "driveFileId", "folderId", "size", "mimeType", "addedAt", "status"]
+    }
+  },
+  "firestore": {
+    "/accounts/{uid}/profile/main": { "schema": "Profile", "description": "Main profile document for the account." },
+    "/accounts/{uid}/devices/{deviceId}": { "schema": "Device", "description": "Registered device for the account." },
+    "/accounts/{uid}/messages/{msgId}": { "schema": "Message", "description": "Message in the account's chat." },
+    "/accounts/{uid}/typing/{deviceId}": { "schema": "TypingStatus", "description": "Typing status for a device." },
+    "/accounts/{uid}/presence/{deviceId}": { "schema": "Presence", "description": "Presence status for a device." },
+    "/accounts/{uid}/spineConfig/main": { "schema": "SpineConfig", "description": "Spine configuration for the account." },
+    "/accounts/{uid}/mediaManifest/{uuid}": { "schema": "MediaManifest", "description": "Manifest entry for a media file." }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Nexus",
+  "description": "Secure, end-to-end encrypted chat with multi-account Google Drive storage pooling.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
