@@ -1,0 +1,3523 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="deep-dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#8b5cf6">
+  <meta name="description" content="Your private, end-to-end encrypted personal messenger">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Nexus">
+
+  <title>Nexus</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <!-- Fonts: Syne (headings) + Figtree (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    /* =====================================================
+       RESET & BASE
+       ===================================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html {
+      height: 100%;
+      font-size: 16px;
+    }
+
+    body {
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* =====================================================
+       CSS VARIABLES — DEFAULTS (Deep Dark theme)
+       themes.js overwrites these at runtime
+       ===================================================== */
+    :root {
+      --bg:            #080810;
+      --bg-alt:        #0c0c18;
+      --surface:       #0f0f1a;
+      --surface2:      #141422;
+      --surface3:      #1a1a2e;
+      --border:        #1e1e32;
+      --border2:       #262640;
+      --accent:        #8b5cf6;
+      --accent-dim:    #6d44d4;
+      --accent-glow:   rgba(139,92,246,0.18);
+      --text:          #f0efff;
+      --text-dim:      #7878a0;
+      --text-muted:    #4a4a6a;
+      --own-bg:        #6d44d4;
+      --own-text:      #ffffff;
+      --other-bg:      #141422;
+      --other-text:    #f0efff;
+      --online:        #34d399;
+      --danger:        #ef4444;
+      --warning:       #f59e0b;
+      --success:       #10b981;
+      --shadow:        0 4px 16px rgba(0,0,0,0.5);
+      --shadow-sm:     0 2px 8px rgba(0,0,0,0.4);
+      --radius-xs:     6px;
+      --radius-sm:     10px;
+      --radius-md:     16px;
+      --radius-lg:     22px;
+      --radius-xl:     28px;
+      --radius-full:   9999px;
+      --transition:    220ms cubic-bezier(0.4,0,0.2,1);
+
+      /* Layout constants (not overridden by themes) */
+      --header-h:      56px;
+      --input-area-h:  64px;
+      --max-w:         520px;
+      --max-w-desktop: 820px;
+    }
+
+    /* =====================================================
+       UTILITY
+       ===================================================== */
+    .hidden { display: none !important; }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.88em;
+      background: var(--surface3);
+      padding: 1px 5px;
+      border-radius: var(--radius-xs);
+    }
+
+    /* =====================================================
+       SCREEN SYSTEM
+       ===================================================== */
+    .screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: var(--bg);
+      overflow-y: auto;
+      overflow-x: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 260ms ease, transform 260ms cubic-bezier(0.4,0,0.2,1);
+      transform: translateY(18px);
+      will-change: transform, opacity;
+    }
+
+    .screen.screen-active {
+      opacity: 1;
+      pointer-events: all;
+      transform: translateY(0);
+    }
+
+    .screen.screen-entering {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+
+    .screen.screen-leaving {
+      opacity: 0;
+      transform: translateY(-12px);
+      pointer-events: none;
+    }
+
+    /* Onboarding screens: vertically centered content */
+    .screen-onboard {
+      justify-content: center;
+      padding: 32px 24px env(safe-area-inset-bottom, 0);
+    }
+
+    .onboard-inner {
+      width: 100%;
+      max-width: var(--max-w);
+    }
+
+    /* =====================================================
+       LOADING SCREEN
+       ===================================================== */
+    #s-loading {
+      justify-content: center;
+      align-items: center;
+    }
+
+    .loading-logo {
+      width: 72px;
+      height: 72px;
+      border-radius: var(--radius-xl);
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      box-shadow: 0 0 32px var(--accent-glow);
+      animation: loading-pulse 2s ease-in-out infinite;
+    }
+
+    .loading-logo-letter {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 40px;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    @keyframes loading-pulse {
+      0%, 100% { box-shadow: 0 0 24px var(--accent-glow); }
+      50%       { box-shadow: 0 0 48px var(--accent-glow), 0 0 80px var(--accent-glow); }
+    }
+
+    #loading-msg {
+      font-size: 14px;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+      animation: blink-text 1.6s ease-in-out infinite;
+    }
+
+    @keyframes blink-text {
+      0%, 100% { opacity: 0.5; }
+      50%       { opacity: 1; }
+    }
+
+    /* =====================================================
+       WELCOME SCREEN
+       ===================================================== */
+    .welcome-logo-wrap {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 32px;
+    }
+
+    .welcome-logo {
+      width: 90px;
+      height: 90px;
+      border-radius: 26px;
+      background: var(--surface2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 40px var(--accent-glow), var(--shadow);
+    }
+
+    .welcome-logo-letter {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 52px;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .welcome-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 36px;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .welcome-sub {
+      font-size: 16px;
+      color: var(--text-dim);
+      text-align: center;
+      margin-bottom: 40px;
+      line-height: 1.6;
+    }
+
+    .feature-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 44px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+
+    .feature-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      background: var(--accent-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 18px;
+    }
+
+    .feature-text {
+      flex: 1;
+    }
+
+    .feature-text strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .feature-text span {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    /* =====================================================
+       ONBOARDING COMMON
+       ===================================================== */
+    .onboard-heading {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 26px;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .onboard-sub {
+      font-size: 14px;
+      color: var(--text-dim);
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+
+    /* =====================================================
+       FIREBASE SETUP SCREEN
+       ===================================================== */
+    .instructions-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      margin-bottom: 16px;
+      font-family: inherit;
+    }
+
+    .instructions-toggle:hover { color: var(--text); }
+
+    .instructions-toggle svg {
+      transition: transform var(--transition);
+    }
+
+    .instructions-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.7;
+    }
+
+    .instructions-block ol {
+      padding-left: 18px;
+    }
+
+    .instructions-block li {
+      margin-bottom: 6px;
+    }
+
+    .instructions-block a {
+      color: var(--accent);
+    }
+
+    .instructions-block code {
+      font-size: 12px;
+    }
+
+    .config-textarea {
+      width: 100%;
+      min-height: 160px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      padding: 14px;
+      resize: vertical;
+      outline: none;
+      transition: border-color var(--transition);
+      margin-bottom: 20px;
+    }
+
+    .config-textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .config-textarea::placeholder { color: var(--text-muted); }
+
+    /* =====================================================
+       SIGN IN SCREEN
+       ===================================================== */
+    .signin-lock-icon {
+      width: 72px;
+      height: 72px;
+      background: var(--surface2);
+      border-radius: var(--radius-xl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 36px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* =====================================================
+       FORM CONTROLS (shared across onboarding)
+       ===================================================== */
+    .field-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .text-input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      margin-bottom: 16px;
+    }
+
+    .text-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .text-input::placeholder { color: var(--text-muted); }
+
+    /* Show / hide password toggle button */
+    .pw-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 4px 2px;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: color var(--transition);
+    }
+    .pw-toggle:hover { color: var(--text-dim); }
+
+    .field-group {
+      margin-bottom: 20px;
+    }
+
+    .field-group .text-input {
+      margin-bottom: 0;
+    }
+
+    /* =====================================================
+       PASSPHRASE STRENGTH METER
+       ===================================================== */
+    .strength-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 20px;
+    }
+
+    .strength-segs {
+      display: flex;
+      gap: 5px;
+      flex: 1;
+    }
+
+    .strength-seg {
+      height: 4px;
+      flex: 1;
+      border-radius: 2px;
+      background: var(--border);
+      transition: background 300ms ease;
+    }
+
+    #strength-label {
+      font-size: 12px;
+      font-weight: 600;
+      width: 48px;
+      text-align: right;
+    }
+
+    /* =====================================================
+       WARNING BOX
+       ===================================================== */
+    .warning-box {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--warning);
+      line-height: 1.5;
+      margin-bottom: 24px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .warning-box svg {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* =====================================================
+       BUTTONS
+       ===================================================== */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 15px 24px;
+      border-radius: var(--radius-full);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      outline: none;
+      transition: background var(--transition), transform 120ms ease,
+                  box-shadow var(--transition), opacity var(--transition);
+      -webkit-user-select: none;
+      user-select: none;
+      letter-spacing: 0.01em;
+    }
+
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn:disabled:active { transform: none; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(139,92,246,0.3);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-dim);
+      box-shadow: 0 6px 20px rgba(139,92,246,0.4);
+    }
+
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover:not(:disabled) {
+      background: var(--surface2);
+      color: var(--text);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.18);
+    }
+
+    .btn-google {
+      background: var(--surface);
+      color: var(--text);
+      border: 1.5px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 15px 28px;  /* extra horizontal padding so the G logo is never clipped */
+    }
+
+    .btn-google:hover:not(:disabled) {
+      background: var(--surface2);
+      border-color: var(--border2);
+    }
+
+    .btn + .btn {
+      margin-top: 10px;
+    }
+
+    .btn-sm {
+      padding: 10px 20px;
+      font-size: 14px;
+    }
+
+    /* =====================================================
+       PIN PAD  (shared by setup and lock screens)
+       ===================================================== */
+    .pin-display {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+
+    .pin-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border2);
+      transition: background 180ms ease, border-color 180ms ease,
+                  transform 160ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    .pin-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.15);
+    }
+
+    .pin-dot.pin-dot-error {
+      background: var(--danger) !important;
+      border-color: var(--danger) !important;
+    }
+
+    .pin-dot.pin-dot-success {
+      background: var(--success) !important;
+      border-color: var(--success) !important;
+    }
+
+    /* Pin dots for the setup screen — same visual as lock screen */
+    .pin-setup-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border2);
+      transition: background 180ms ease, border-color 180ms ease,
+                  transform 160ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    .pin-setup-dot.filled {
+      background: var(--accent);
+      border-color: var(--accent);
+      transform: scale(1.15);
+    }
+
+    .pin-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    .pin-key {
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 22px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background var(--transition), transform 100ms ease,
+                  border-color var(--transition);
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    .pin-key:active {
+      background: var(--surface3);
+      border-color: var(--accent);
+      transform: scale(0.93);
+    }
+
+    .pin-key.key-empty {
+      background: transparent;
+      border-color: transparent;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .pin-key.key-back {
+      font-size: 20px;
+      color: var(--text-dim);
+    }
+
+    .pin-key.key-back:active {
+      color: var(--danger);
+    }
+
+    /* Keyboard invoke button */
+    .keyboard-btn {
+      margin-top: 24px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--surface);
+      border: 1.5px solid var(--border2);
+      border-radius: var(--radius-full);
+      color: var(--text-dim);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+    }
+    .keyboard-btn:hover { background: var(--surface2); color: var(--text); }
+    .keyboard-btn:active { transform: scale(0.96); }
+
+    /* Shake animation for wrong PIN */
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      15%       { transform: translateX(-10px); }
+      30%       { transform: translateX(10px); }
+      45%       { transform: translateX(-8px); }
+      60%       { transform: translateX(8px); }
+      75%       { transform: translateX(-4px); }
+      90%       { transform: translateX(4px); }
+    }
+
+    .shake { animation: shake 480ms cubic-bezier(0.36,0.07,0.19,0.97); }
+
+    /* =====================================================
+       BIOMETRICS SCREEN
+       ===================================================== */
+    .bio-icon-wrap {
+      width: 80px;
+      height: 80px;
+      background: var(--surface2);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 40px;
+      box-shadow: 0 0 32px var(--accent-glow);
+    }
+
+    /* =====================================================
+       LOCK SCREEN
+       ===================================================== */
+    #s-lock {
+      background: var(--bg);
+    }
+
+    .lock-inner {
+      width: 100%;
+      max-width: var(--max-w);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 72px 32px 40px;
+      flex: 1;
+    }
+
+    .lock-prompt {
+      font-family: 'Syne', sans-serif;
+      font-weight: 600;
+      font-size: 21px;
+      color: var(--text);
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .lock-avatar {
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 38px;
+      color: #fff;
+      margin-bottom: 14px;
+      box-shadow: 0 0 32px var(--accent-glow), var(--shadow);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .lock-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 50%;
+    }
+
+    .lock-name {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 20px;
+      color: var(--text);
+      margin-bottom: 4px;
+      text-align: center;
+    }
+
+    .lock-email {
+      font-size: 15px;
+      color: var(--text-dim);
+      margin-bottom: 52px;
+      text-align: center;
+    }
+
+    #pin-dots-row {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 40px;
+    }
+
+    .lock-bio-hint {
+      margin-top: 20px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .bio-btn {
+      margin-top: 16px;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--accent);
+      font-size: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition), transform 120ms ease;
+    }
+
+    .bio-btn:active { transform: scale(0.93); }
+
+    /* =====================================================
+       APP SCREEN — Main Chat
+       ===================================================== */
+    #s-app {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 0;
+      align-items: stretch;
+      /* NOTE: do NOT add position:relative here.
+         #s-app inherits position:fixed; inset:0 from .screen which is how it
+         fills the full viewport. Overriding to position:relative collapses its
+         height to content-size, breaking the flex layout and hiding the input bar.
+         position:fixed IS a containing block for position:absolute children, so
+         wallpaper layers with position:absolute; inset:0 fill #s-app correctly. */
+    }
+
+    /* Header */
+    .app-header {
+      position: relative;
+      z-index: 10;
+      height: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      padding-top: env(safe-area-inset-top, 0);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .header-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      color: #fff;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 150ms ease, box-shadow 150ms ease;
+    }
+
+    .header-avatar:hover {
+      transform: scale(1.06);
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .header-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .header-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 17px;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    /* Status dot in header */
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--online);
+      flex-shrink: 0;
+      transition: background 400ms ease;
+    }
+
+    .status-dot.offline { background: var(--text-muted); }
+
+    .header-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+    }
+    /* Minimum 44×44px touch targets on coarse-pointer (touch) devices */
+    @media (pointer: coarse) {
+      .icon-btn { width: 44px; height: 44px; }
+      .send-btn  { width: 44px; height: 44px; }
+      .attach-btn { width: 44px; height: 44px; }
+    }
+
+    .icon-btn:hover { background: var(--surface2); color: var(--text); }
+    .icon-btn:active { background: var(--surface3); }
+
+    /* Messages list */
+    /* #chat-area is the flex:1 container that holds the messages list.
+       Wallpaper layers now live in #s-app (parent), so this wrapper only
+       needs to control the scrollable area's flex sizing. */
+    #chat-area {
+      flex: 1;
+      min-height: 0;      /* allow flex child to shrink below content size */
+      overflow: hidden;
+    }
+
+    .messages-list {
+      height: 100%;       /* fill #chat-area */
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      /* Allow vertical scrolling without the browser interpreting it as a
+         long-press context-menu trigger (Samsung Chrome). */
+      touch-action: pan-y;
+    }
+
+    .messages-list::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    .messages-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .messages-list::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 3px;
+    }
+
+    /* Date separator */
+    .date-sep {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 16px 0 8px;
+    }
+
+    .date-sep::before,
+    .date-sep::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .date-sep span {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    /* Message rows */
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 2px;
+      width: 100%;   /* must be full width for alignment to work */
+      -webkit-user-select: none;
+      user-select: none;
+      position: relative; /* required: contains the absolutely-positioned .msg-select-check */
+    }
+    /* Re-enable text selection inside bubbles on desktop only */
+    @media (hover: hover) and (pointer: fine) {
+      .msg-bubble { user-select: text; -webkit-user-select: text; }
+    }
+    /* Explicitly block touch-callout (Samsung long-press text popup) */
+    @media (pointer: coarse) {
+      .msg-bubble {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+    }
+
+    .msg-row.own {
+      align-items: flex-end;
+    }
+
+    .msg-row.other {
+      align-items: flex-start;
+    }
+
+    .msg-device {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      margin-left: 12px;
+    }
+
+    /* =====================================================
+       MESSAGE AVATAR (profile pic beside other-device bubbles)
+       ===================================================== */
+    .msg-row.other {
+      /* Make room for the avatar on the left */
+      padding-left: 0;
+    }
+
+    .msg-with-avatar {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      max-width: 75%;
+    }
+
+    .msg-avatar-col {
+      flex-shrink: 0;
+      width: var(--msg-avatar-size, 30px);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      padding-top: 2px;
+    }
+
+    .msg-avatar-img {
+      width: var(--msg-avatar-size, 30px);
+      height: var(--msg-avatar-size, 30px);
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: calc(var(--msg-avatar-size, 30px) * 0.4);
+      color: #fff;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .msg-avatar-img img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 50%;
+    }
+
+    /* Spacer in place of avatar for consecutive messages from same device */
+    .msg-avatar-spacer {
+      width: var(--msg-avatar-size, 30px);
+      flex-shrink: 0;
+    }
+
+    /* Bubbles */
+    .msg-bubble {
+      max-width: 75%;
+      padding: 9px 13px;
+      border-radius: var(--radius-lg);
+      word-break: break-word;
+      font-size: var(--msg-font-size, 14px);
+      line-height: 1.55;
+      cursor: pointer;
+      position: relative;
+      transition: transform 100ms ease;
+      will-change: transform;
+    }
+
+    .msg-bubble:active { transform: scale(0.98); }
+
+    .msg-row.own .msg-bubble {
+      background: var(--own-bg);
+      color: var(--own-text);
+      border-bottom-right-radius: var(--radius-xs);
+    }
+
+    .msg-row.other .msg-bubble {
+      background: var(--other-bg);
+      color: var(--other-text);
+      border-bottom-left-radius: var(--radius-xs);
+      border: 1px solid var(--border);
+      max-width: 100%; /* container (msg-with-avatar) is already capped at 75% */
+    }
+
+    .msg-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .msg-time {
+      font-size: 11px;
+      opacity: 0.65;
+      /* Always visible */
+    }
+
+    .read-tick {
+      font-size: 12px;
+      opacity: 0.6;
+      letter-spacing: -3px;
+    }
+
+    .read-tick.read {
+      opacity: 1;
+      color: var(--online);
+    }
+
+    /* Pending (offline) message clock indicator */
+    .pending-tick {
+      font-size: 13px;
+      opacity: 0.7;
+      letter-spacing: 0;
+    }
+
+    /* Pending bubble — slightly dimmed to distinguish from delivered messages */
+    .pending-bubble .msg-bubble {
+      opacity: 0.75;
+    }
+
+    .deleted-text {
+      font-size: 13px;
+      font-style: italic;
+      opacity: 0.55;
+    }
+
+    .decrypt-error {
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    /* Consecutive messages from same device — tighten spacing */
+    .msg-row + .msg-row.own,
+    .msg-row + .msg-row.other {
+      margin-top: 1px;
+    }
+
+    /* Empty state */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 32px;
+      text-align: center;
+      gap: 12px;
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      margin-bottom: 4px;
+    }
+
+    .empty-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--text);
+    }
+
+    .empty-sub {
+      font-size: 14px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* Typing indicator */
+    .typing-indicator {
+      padding: 6px 16px;
+      font-size: 13px;
+      color: var(--text-dim);
+      font-style: italic;
+      min-height: 28px;
+      flex-shrink: 0;
+    }
+
+    /* Input area */
+    .input-area {
+      flex-shrink: 0;
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 10px 12px;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      /* On iOS Safari the keyboard doesn't shrink the viewport — we compensate
+         via --keyboard-h which is updated by the visualViewport resize listener */
+      margin-bottom: var(--keyboard-h, 0px);
+    }
+
+    .msg-input {
+      flex: 1;
+      min-height: 42px;
+      max-height: 120px;
+      padding: 10px 14px;
+      background: var(--bg-alt);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-xl);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      resize: none;
+      outline: none;
+      overflow-y: auto;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .msg-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+
+    .msg-input::placeholder { color: var(--text-muted); }
+
+    .msg-input::-webkit-scrollbar { width: 0; }
+
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background var(--transition), transform 120ms ease,
+                  box-shadow var(--transition);
+      box-shadow: 0 2px 10px rgba(139,92,246,0.35);
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: var(--accent-dim);
+      box-shadow: 0 4px 16px rgba(139,92,246,0.5);
+    }
+
+    .send-btn:active:not(:disabled) { transform: scale(0.9); }
+    .send-btn:disabled { background: var(--border2); box-shadow: none; cursor: not-allowed; }
+
+    /* =====================================================
+       OVERLAYS (accounts, settings)
+       ===================================================== */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      animation: overlay-in 260ms ease forwards;
+    }
+
+    @keyframes overlay-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    .overlay-panel {
+      background: var(--surface);
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      border-top: 1px solid var(--border);
+      max-height: 88vh;
+      overflow-y: auto;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+      animation: panel-up 280ms cubic-bezier(0.32,0.72,0,1) forwards;
+    }
+
+    @keyframes panel-up {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+
+    .overlay-panel::-webkit-scrollbar { width: 0; }
+
+    .overlay-handle {
+      width: 36px;
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      margin: 12px auto 4px;
+    }
+
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .overlay-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--text);
+    }
+
+    /* Account list */
+    .account-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 20px;
+      cursor: pointer;
+      transition: background var(--transition);
+      position: relative;
+    }
+
+    .account-row:hover { background: var(--surface2); }
+    .account-row:active { background: var(--surface3); }
+
+    .account-row.current {
+      background: var(--accent-glow);
+    }
+
+    .account-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 18px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .account-info { flex: 1; min-width: 0; }
+    .account-name {
+      font-weight: 600;
+      font-size: 14.5px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .account-email {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .account-device {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .account-current-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--accent-glow);
+      border-radius: var(--radius-full);
+      padding: 3px 10px;
+    }
+
+    .overlay-footer {
+      padding: 12px 20px 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Settings panel */
+    .settings-section {
+      padding: 20px 20px 0;
+    }
+
+    .settings-section-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .settings-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+
+    .settings-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      padding: 7px 10px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .settings-text-input {
+      flex: 1;
+      padding: 9px 12px;
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 14px;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+
+    .settings-text-input:focus { border-color: var(--accent); }
+
+    /* Theme grid */
+    .theme-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .theme-swatch {
+      border: 2px solid transparent;
+      border-radius: var(--radius-md);
+      padding: 10px 8px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      transition: transform 150ms ease, border-color 150ms ease;
+      outline: none;
+    }
+
+    .theme-swatch:hover { transform: scale(1.04); }
+
+    .theme-swatch.active {
+      border-color: var(--accent) !important;
+    }
+
+    .swatch-bubble {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+    }
+
+    .swatch-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .settings-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 8px 0 20px;
+    }
+
+    /* =====================================================
+       TOAST NOTIFICATION
+       ===================================================== */
+    #toast {
+      position: fixed;
+      bottom: calc(80px + env(safe-area-inset-bottom, 0) + var(--keyboard-h, 0px));
+      left: 50%;
+      transform: translateX(-50%) translateY(16px);
+      background: var(--surface3);
+      color: var(--text);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius-full);
+      padding: 10px 20px;
+      font-size: 13.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      max-width: calc(100vw - 48px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      z-index: 9999;
+      opacity: 0;
+      pointer-events: none;
+      box-shadow: var(--shadow);
+      transition: opacity 220ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1);
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Settings label text (used in Data section) */
+    .settings-label {
+      font-size: 14px;
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+
+    /* =====================================================
+       PWA INSTALL BUTTON (floating)
+       ===================================================== */
+
+    /* =====================================================
+       MEDIA MESSAGES
+       ===================================================== */
+    .media-bubble { cursor: pointer; border-radius: var(--radius-md); overflow: hidden; max-width: 280px; }
+    .media-placeholder {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 8px; padding: 20px; background: var(--surface3); border-radius: var(--radius-md);
+      color: var(--text-dim); font-size: 13px; min-width: 140px; cursor: pointer;
+    }
+    .msg-thumb {
+      display: block; width: 100%; max-width: 280px; max-height: 320px;
+      object-fit: cover; border-radius: var(--radius-md); cursor: pointer;
+      transition: opacity 150ms ease;
+    }
+    .msg-thumb:hover { opacity: 0.9; }
+    .media-caption { font-size: 12px; color: var(--text-dim); padding: 4px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+    .media-file {
+      display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+      background: var(--surface3); border-radius: var(--radius-md); cursor: pointer;
+      transition: background var(--transition); min-width: 200px;
+    }
+    .media-file:hover { background: var(--border); }
+    .file-icon { font-size: 28px; flex-shrink: 0; }
+    .file-info { flex: 1; min-width: 0; }
+    .file-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+    .file-download-icon { color: var(--accent); flex-shrink: 0; }
+    /* Lightbox */
+    #media-lightbox { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; }
+    .lb-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); }
+    .lb-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; max-width: 95vw; max-height: 95vh; }
+    .lb-close { position: absolute; top: -40px; right: 0; background: none; border: none; color: #fff; font-size: 32px; cursor: pointer; line-height: 1; padding: 4px 8px; }
+    #lb-img { max-width: 95vw; max-height: 85vh; object-fit: contain; border-radius: var(--radius-md); }
+    .lb-title { margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 13px; }
+    /* Attach button */
+    .attach-btn {
+      width: 42px; height: 42px; border-radius: 50%; background: var(--surface2);
+      border: 1.5px solid var(--border); color: var(--text-dim);
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      flex-shrink: 0; transition: background var(--transition), color var(--transition);
+    }
+    .attach-btn:hover { background: var(--surface3); color: var(--text); }
+    .attach-btn:active { transform: scale(0.92); }
+    .attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Storage settings */
+    .storage-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .storage-row:last-child { border-bottom: none; }
+    .storage-account-info { flex: 1; min-width: 0; }
+    .storage-email { font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .storage-bar-wrap { height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 5px; overflow: hidden; }
+    .storage-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 400ms ease; }
+    .storage-numbers { font-size: 11.5px; color: var(--text-dim); }
+    .storage-reauth { color: var(--warning); font-weight: 600; }
+    /* Avatar circle in the Linked Devices list */
+    .dev-list-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .dev-list-avatar-letter {
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      color: #fff;
+    }
+    .storage-reauth-btn {
+      background: none;
+      border: 1px solid var(--warning);
+      border-radius: var(--radius-full);
+      color: var(--warning);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 10px;
+      cursor: pointer;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: background var(--transition);
+    }
+    .storage-reauth-btn:hover { background: rgba(245,158,11,0.12); }
+    .storage-empty { font-size: 13px; color: var(--text-muted); padding: 12px 0; }
+    .btn-remove-drive { width: 28px; height: 28px; border-radius: 50%; background: rgba(239,68,68,0.1); border: none; color: var(--danger); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background var(--transition); }
+    .btn-remove-drive:hover { background: rgba(239,68,68,0.2); }
+
+    /* =====================================================
+       DESKTOP CENTERING
+       ===================================================== */
+    @media (min-width: 600px) {
+      .screen-onboard {
+        padding: 60px 32px;
+      }
+    }
+
+    /* Desktop: give the chat room to breathe */
+    @media (min-width: 900px) {
+      /* Full-width layout — no side columns, no artificial max-width constraint */
+      #s-app {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+      }
+
+      /* Header: restore normal flex gap and padding, no display:contents tricks */
+      .app-header {
+        gap: 12px;
+        padding: 0 24px;
+        padding-top: env(safe-area-inset-top, 0);
+      }
+      .messages-list {
+        padding: 20px 32px;
+      }
+
+      .typing-indicator {
+        padding: 6px 32px;
+      }
+
+      .input-area {
+        padding: 12px 24px;
+      }
+
+      .overlay-panel {
+        border-radius: var(--radius-xl);
+        margin-bottom: 40px;
+        width: 100%;
+        max-width: 520px;
+        align-self: flex-end;
+        margin-right: auto;
+        margin-left: auto;
+      }
+
+      /* Bubbles: own messages at 75% of row, received messages fill their 75% container */
+      .msg-bubble {
+        max-width: 75%;
+      }
+      .msg-with-avatar {
+        max-width: 75%;
+      }
+      .msg-row.other .msg-bubble {
+        max-width: 100%;
+      }
+
+      /* Center the message stream on very wide screens */
+      .messages-list {
+        width: 100%;
+      }
+    }
+
+    /* Simple centering for 600-899px (tablet range) */
+    @media (min-width: 600px) and (max-width: 899px) {
+      .messages-list {
+        padding: 16px 20px;
+      }
+      .msg-bubble {
+        max-width: 75%;
+      }
+      .msg-with-avatar {
+        max-width: 75%;
+      }
+      .msg-row.other .msg-bubble {
+        max-width: 100%;
+      }
+    }
+
+    /* =====================================================
+       MISC ANIMATIONS
+       ===================================================== */
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .fade-in { animation: fade-in 280ms ease forwards; }
+
+    /* Glow pulse for lock screen biometrics button */
+    @keyframes bio-glow {
+      0%, 100% { box-shadow: 0 0 12px var(--accent-glow); }
+      50%       { box-shadow: 0 0 28px var(--accent-glow), 0 0 48px var(--accent-glow); }
+    }
+
+    .bio-btn:not(.hidden) {
+      animation: bio-glow 2.4s ease-in-out infinite;
+    }
+
+    /* =====================================================
+       SAFE AREA PADDING for very tall screens
+       ===================================================== */
+    #s-lock {
+      padding-top: env(safe-area-inset-top, 0);
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    /* =====================================================
+       UPLOAD PROGRESS BAR
+       ===================================================== */
+    .upload-progress-wrap {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      z-index: 5;
+    }
+    .upload-progress-inner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: var(--max-w-desktop);
+      margin: 0 auto;
+    }
+    .upload-progress-label {
+      font-size: 13px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .upload-progress-track {
+      flex: 1;
+      height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .upload-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 150ms ease;
+      width: 0%;
+    }
+    .upload-progress-pct {
+      font-size: 12px;
+      color: var(--text-dim);
+      min-width: 30px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .upload-cancel-btn {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--danger);
+      background: none;
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-full);
+      padding: 3px 10px;
+      cursor: pointer;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: background var(--transition);
+      white-space: nowrap;
+    }
+    .upload-cancel-btn:hover { background: rgba(239,68,68,0.1); }
+
+    /* Desktop: upload bar spans full width */
+    @media (min-width: 900px) {
+      .upload-progress-wrap { grid-column: 1 / -1; }
+    }
+
+    /* =====================================================
+       PROFILE PICTURE / APPEARANCE SETTINGS
+       ===================================================== */
+    .profile-pic-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .settings-avatar-preview {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 26px;
+      color: #fff;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .profile-pic-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Colour picker rows */
+    .color-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .color-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+    }
+    .color-picker-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type="color"].color-swatch {
+      width: 36px;
+      height: 36px;
+      padding: 2px;
+      border: 1.5px solid var(--border2);
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    input[type="color"].color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"].color-swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+    .btn-color-reset {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-full);
+      padding: 3px 8px;
+      cursor: pointer;
+      font-family: 'Figtree', system-ui, sans-serif;
+      transition: color var(--transition), border-color var(--transition);
+      white-space: nowrap;
+    }
+    .btn-color-reset:hover { color: var(--text-dim); border-color: var(--border2); }
+
+    /* Wallpaper preview thumbnail in settings */
+    .wallpaper-thumb {
+      width: 48px;
+      height: 36px;
+      border-radius: var(--radius-xs);
+      object-fit: cover;
+      border: 1px solid var(--border2);
+    }
+    .wallpaper-row {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      margin-bottom: 14px;
+      gap: 8px;
+    }
+    .wallpaper-row label {
+      font-size: 14px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .wallpaper-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-height: 32px;
+    }
+    /* Make wallpaper thumb vertically centred with buttons */
+    .wallpaper-controls .wallpaper-thumb {
+      align-self: center;
+      flex-shrink: 0;
+    }
+
+    /* When a wallpaper is active, make bubbles slightly more opaque
+       so they remain readable against complex backgrounds. */
+    .messages-list.has-wallpaper .msg-row.own .msg-bubble {
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    .messages-list.has-wallpaper .msg-row.other .msg-bubble {
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+
+    /* ---- Phase 4: Context menu ------------------------------------------ */
+    .ctx-menu {
+      position: fixed;
+      z-index: 9000;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow);
+      min-width: 220px;
+      max-width: 280px;
+      overflow: visible;
+      opacity: 0;
+      transform: scale(0.92);
+      transform-origin: top left;
+      transition: opacity 120ms ease, transform 120ms ease;
+      pointer-events: none;
+    }
+    .ctx-menu.ctx-menu-visible {
+      opacity: 1;
+      transform: scale(1);
+      pointer-events: all;
+      overflow: hidden; /* clip only when visible so border-radius works */
+    }
+    .ctx-reactions {
+      display: flex;
+      gap: 0px;
+      padding: 8px 6px 6px;
+      background: var(--surface3);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: nowrap;
+      justify-content: space-between;
+    }
+    .ctx-reaction-btn {
+      background: none;
+      border: none;
+      font-size: 22px;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 8px;
+      transition: background 120ms;
+      line-height: 1;
+    }
+    .ctx-reaction-btn:hover { background: var(--border2); }
+    .ctx-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 2px 0;
+    }
+    .ctx-action {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: none;
+      border: none;
+      padding: 11px 16px;
+      font-size: 14px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 100ms;
+      font-family: inherit;
+    }
+    .ctx-action:hover { background: var(--border); }
+    .ctx-action.ctx-danger { color: var(--danger); }
+    .ctx-action.ctx-danger:hover { background: rgba(239,68,68,0.08); }
+
+    /* ---- Phase 4: Reaction pills ---------------------------------------- */
+    .msg-reactions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 5px;
+    }
+    .reaction-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 7px;
+      border-radius: 12px;
+      background: var(--surface3);
+      border: 1px solid var(--border2);
+      font-size: 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 120ms, border-color 120ms;
+      line-height: 1.4;
+    }
+    .reaction-pill:hover { background: var(--border); }
+    .reaction-pill.mine {
+      background: var(--accent-glow);
+      border-color: var(--accent);
+    }
+
+    /* ---- Phase 4: Reply quote block ------------------------------------- */
+    .reply-quote {
+      margin-bottom: 6px;
+      padding: 6px 10px;
+      border-left: 3px solid var(--accent);
+      border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+      background: rgba(0,0,0,0.15);
+      cursor: pointer;
+      max-width: 100%;
+      overflow: hidden;
+      /* Prevent desktop text-selection from eating the click event */
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .reply-quote:hover { background: rgba(0,0,0,0.25); }
+    .rq-name {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .rq-text {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ---- Phase 4: Reply / Edit banner ----------------------------------- */
+    .reply-edit-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: var(--surface2);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      animation: slideDown 150ms ease;
+    }
+    .reply-edit-banner.hidden { display: none; }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .reb-bar {
+      width: 3px;
+      min-height: 32px;
+      border-radius: 2px;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+    .reb-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .reb-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 2px;
+    }
+    .reb-text {
+      font-size: 13px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .reb-cancel {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 6px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: color 120ms, background 120ms;
+    }
+    .reb-cancel:hover { color: var(--text); background: var(--border); }
+
+    /* ---- Phase 4: Edited label ------------------------------------------ */
+    .msg-edited {
+      font-size: 10.5px;
+      color: var(--text-muted);
+      margin-right: 5px;
+      font-style: italic;
+    }
+
+    /* ---- Phase 4: Message highlight (scroll-to) ------------------------- */
+    @keyframes msgHighlight {
+      0%   { background: var(--accent-glow); }
+      80%  { background: var(--accent-glow); }
+      100% { background: transparent; }
+    }
+    .msg-row.msg-highlight .msg-bubble {
+      animation: msgHighlight 1.2s ease forwards;
+    }
+
+    /* ---- Multi-select mode ----------------------------------------------- */
+    .msg-row.msg-selectable:active { opacity: 0.85; }
+
+    /* Select toolbar at bottom */
+    #select-toolbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 200;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px 12px;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+      animation: slideUp 180ms cubic-bezier(0.32,0.72,0,1);
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    .select-toolbar-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 11px;
+      border-radius: var(--radius-full);
+      border: none;
+      font-family: 'Figtree', system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition);
+      white-space: nowrap;
+    }
+    .select-toolbar-count {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      margin-right: 4px;
+    }
+    .select-toolbar-btn.danger {
+      background: rgba(239,68,68,0.12);
+      color: var(--danger);
+    }
+    .select-toolbar-btn.danger:hover { background: rgba(239,68,68,0.2); }
+    .select-toolbar-btn.ghost {
+      background: var(--surface2);
+      color: var(--text-dim);
+    }
+    .select-toolbar-btn.ghost:hover { background: var(--surface3); color: var(--text); }
+    .select-toolbar-btn.accent {
+      background: var(--accent-glow);
+      color: var(--accent);
+    }
+    .select-toolbar-btn.accent:hover { background: var(--accent); color: #fff; }
+
+    /* ---- Misc ---------------------------------------------------------------- */
+    /* ---- Inline search bar (replaces header) ----------------------------- */
+    .search-bar-inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius-sm);
+      padding: 0 12px;
+      height: 36px;
+    }
+    .search-input-inline {
+      flex: 1;
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 15px;
+      font-family: inherit;
+    }
+    .search-input-inline::placeholder { color: var(--text-muted); }
+    .search-close-inline {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 4px;
+      line-height: 1;
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+    .search-close-inline:hover { background: var(--border); color: var(--text); }
+
+    /* Search results dropdown below header */
+    .search-dropdown {
+      position: absolute;
+      top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      max-height: 360px;
+      overflow-y: auto;
+      box-shadow: var(--shadow);
+    }
+    .search-dropdown::-webkit-scrollbar { width: 3px; }
+    .search-dropdown::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+    /* ---- Swipe-to-reply icon --------------------------------------------- */
+    .swipe-reply-icon {
+      position: absolute;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 80ms;
+      color: var(--accent);
+      width: 28px;
+      text-align: center;
+    }
+    .msg-row { position: relative; }
+
+    /* ---- Slideshow editor grid ------------------------------------------- */
+    .ss-thumb-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 8px;
+      max-height: 280px;
+      overflow-y: auto;
+      margin-bottom: 4px;
+    }
+    .ss-thumb-item {
+      position: relative;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      border: 1px solid var(--border2);
+    }
+    .ss-thumb-img {
+      width: 100%;
+      height: 80px;
+      object-fit: cover;
+      display: block;
+    }
+    .ss-thumb-actions {
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      padding: 4px;
+      background: var(--surface3);
+    }
+    .ss-thumb-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      color: var(--text-dim);
+      font-size: 13px;
+      width: 26px;
+      height: 24px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background var(--transition);
+    }
+    .ss-thumb-btn:hover { background: var(--border2); color: var(--text); }
+    .ss-thumb-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .search-empty {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 14px;
+      padding: 40px 20px;
+    }
+    .search-result-row {
+      padding: 12px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 100ms;
+    }
+    .search-result-row:hover { background: var(--surface2); }
+    .sr-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+      gap: 8px;
+    }
+    .sr-name { font-size: 12.5px; font-weight: 600; color: var(--accent); flex-shrink: 0; }
+    .sr-date { font-size: 11.5px; color: var(--text-muted); }
+    .sr-text { font-size: 13.5px; color: var(--text-dim); line-height: 1.4; }
+    .search-match { background: rgba(139,92,246,0.3); color: var(--text); border-radius: 2px; }
+
+    /* ---- Phase 5: Settings hints and export ----------------------------- */
+    .settings-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      line-height: 1.4;
+    }
+
+    /* ---- Phase 5: Message animation styles ------------------------------ */
+    /* Default (fade-up) — applied without a class so new messages always animate */
+    @keyframes msgFadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg-row { animation: msgFadeUp 200ms ease both; }
+
+    /* Slide in from the side (iMessage style) */
+    @keyframes msgSlideInOwn   { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:none; } }
+    @keyframes msgSlideInOther { from { opacity:0; transform:translateX(-20px);} to { opacity:1; transform:none; } }
+    .anim-slide-in .msg-row.own   { animation: msgSlideInOwn   200ms ease both; }
+    .anim-slide-in .msg-row.other { animation: msgSlideInOther 200ms ease both; }
+
+    /* Pop scale (WhatsApp style) */
+    @keyframes msgPop {
+      from { opacity:0; transform:scale(0.88); }
+      60%  { transform:scale(1.04); }
+      to   { opacity:1; transform:scale(1); }
+    }
+    .anim-pop .msg-row { animation: msgPop 220ms cubic-bezier(.34,1.56,.64,1) both; }
+
+    /* No animation */
+    .anim-none .msg-row { animation: none; }
+
+    /* Fade-up is default — explicit class just overrides slide/pop if switched back */
+    .anim-fade-up .msg-row { animation: msgFadeUp 200ms ease both; }
+
+    /* Pending bubble should not re-animate after it's replaced */
+    .pending-bubble { animation: none !important; }
+
+    /* ---- Toggle switch ------------------------------------------------------ */
+    .toggle-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; }
+    .toggle-switch input { opacity:0; width:0; height:0; }
+    .toggle-slider {
+      position:absolute; cursor:pointer; inset:0;
+      background:var(--border2); border-radius:24px;
+      transition:background 200ms;
+    }
+    .toggle-slider::before {
+      content:''; position:absolute;
+      height:18px; width:18px; left:3px; bottom:3px;
+      background:#fff; border-radius:50%;
+      transition:transform 200ms;
+    }
+    .toggle-switch input:checked + .toggle-slider { background:var(--accent); }
+    .toggle-switch input:checked + .toggle-slider::before { transform:translateX(20px); }
+
+    /* ---- Wallpaper layers --------------------------------------------------- */
+    /* #s-app is position:fixed (from .screen) which makes it a containing block
+       for position:absolute children. So inset:0 on .wall-video / .wall-slide-layer
+       fills #s-app (= the viewport) exactly.
+
+       CSS painting order rule: non-positioned flex items paint BEFORE a
+       position:absolute child with z-index:0. To guarantee all UI chrome
+       (header, input bar, etc.) is always visible above the wallpaper, every
+       meaningful flex child of #s-app is given position:relative so it paints
+       in the "positioned z-index:auto" group (after z-index:0 in DOM order). */
+    .wall-video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; z-index: 0; pointer-events: none;
+    }
+    .wall-slide-layer {
+      position: absolute; inset: 0; z-index: 0;
+      background-size: cover; background-position: center;
+      pointer-events: none;
+    }
+
+    /* All flex children of #s-app — painted above wallpaper layers (z-index:0) */
+    #upload-progress-wrap { position: relative; z-index: 4; }
+    #chat-area            { position: relative; z-index: 1; }
+    #messages-list        { position: relative; z-index: 1; }
+    .typing-indicator     { position: relative; z-index: 2; }
+    .input-area           { position: relative; z-index: 3; }
+    /* .app-header already has position:relative; z-index:10 in its own rule */
+
+    /* ---- Frosted-glass header and input bar when wallpaper is active -------- */
+    /* Dark themes (default) */
+    #s-app.has-wallpaper .app-header {
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(18px) saturate(1.4);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      border-bottom-color: rgba(255, 255, 255, 0.07);
+      box-shadow: none;
+    }
+    #s-app.has-wallpaper .input-area {
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(18px) saturate(1.4);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      border-top-color: rgba(255, 255, 255, 0.07);
+    }
+    #s-app.has-wallpaper .typing-indicator {
+      background: transparent;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+    }
+    /* Light theme override */
+    [data-theme="light"] #s-app.has-wallpaper .app-header,
+    [data-theme="light"] #s-app.has-wallpaper .input-area {
+      background: rgba(255, 255, 255, 0.55);
+    }
+    /* Make chat area and messages-list transparent so wallpaper shows through */
+    #s-app.has-wallpaper #chat-area,
+    #s-app.has-wallpaper #messages-list {
+      background: transparent !important;
+    }
+    /* Input field: slightly more opaque so text is readable */
+    #s-app.has-wallpaper .msg-input {
+      background: rgba(0, 0, 0, 0.35);
+      border-color: rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+    [data-theme="light"] #s-app.has-wallpaper .msg-input {
+      background: rgba(255, 255, 255, 0.45);
+      color: var(--text);
+    }
+
+    /* ---- Link preview card -------------------------------------------------- */
+    .link-preview {
+      margin-top:6px; border:1px solid var(--border2);
+      border-radius:var(--radius-sm); overflow:hidden;
+      background:var(--surface3); cursor:pointer; max-width:320px;
+    }
+    .link-preview:hover { background:var(--border); }
+    .lp-image { width:100%; height:110px; object-fit:cover; display:block; }
+    .lp-body  { padding:8px 10px; }
+    .lp-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:3px;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .lp-desc  { font-size:12px; color:var(--text-dim); line-height:1.4;
+                display:-webkit-box; -webkit-line-clamp:2;
+                -webkit-box-orient:vertical; overflow:hidden; }
+    .lp-host  { font-size:11px; color:var(--text-muted); margin-top:3px; }
+
+    /* Slideshow editor waterdrop section — hidden by default, flex when visible */
+    #ss-waterdrop-section:not(.hidden) { display: flex; }
+    /* Slideshow settings block in main settings panel */
+    #slideshow-settings-block:not(.hidden) { display: flex; }
+    /* Waterdrop origin row in settings panel */
+    #slideshow-waterdrop-row:not(.hidden) { display: flex; }
+
+    /* ---- Spine migration modal ---------------------------------------------- */
+    .migrate-modal {
+      position:fixed; inset:0; z-index:9500;
+      background:rgba(0,0,0,0.72);
+      display:flex; align-items:center; justify-content:center; padding:20px;
+    }
+    .migrate-panel {
+      background:var(--surface2); border:1px solid var(--border2);
+      border-radius:var(--radius-md); padding:24px;
+      width:min(420px,100%); box-shadow:var(--shadow);
+    }
+    .migrate-title { font-size:17px; font-weight:700; margin-bottom:16px; color:var(--text); }
+    .migrate-row   { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+    .migrate-row label { font-size:13px; color:var(--text-dim); flex-shrink:0; min-width:40px; }
+    .migrate-row select { flex:1; }
+    .migrate-log {
+      font-size:12px; color:var(--text-dim); font-family:monospace;
+      background:var(--surface); border-radius:6px; padding:10px;
+      max-height:140px; overflow-y:auto; margin-top:10px; display:none;
+      white-space:pre-wrap; word-break:break-all;
+    }
+    .migrate-btn-row { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+
+    /* =====================================================
+       SCROLL-TO-BOTTOM BUTTON  (created dynamically in JS)
+       ===================================================== */
+    #scroll-to-bottom {
+      position: fixed;
+      bottom: calc(var(--input-area-h) + 12px + env(safe-area-inset-bottom, 0px) + var(--keyboard-h, 0px) + var(--reply-banner-h, 0px));
+      right: 16px;
+      z-index: 150;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--surface2);
+      border: 1.5px solid var(--border2);
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      opacity: 0;
+      transform: translateY(12px) scale(0.85);
+      pointer-events: none;
+      /* Animate both visibility and vertical position smoothly */
+      transition: opacity 200ms ease,
+                  transform 200ms ease,
+                  bottom 220ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    #scroll-to-bottom.s2b-visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: all;
+    }
+    #scroll-to-bottom:hover { background: var(--surface3); color: var(--text); }
+    /* Don't fight the bottom transition when the user clicks */
+    #scroll-to-bottom:active { transform: scale(0.92); }
+
+    .scroll-unread-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 18px;
+      height: 18px;
+      border-radius: 9px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    .scroll-unread-badge.badge-visible { display: flex; }
+
+    /* =====================================================
+       MULTI-SELECT: checkmark as absolute overlay on left
+       ===================================================== */
+    .msg-row.msg-selectable {
+      position: relative;
+      padding-left: 38px;
+      cursor: pointer;
+      user-select: none;
+      transition: padding-left 150ms ease;
+    }
+    .msg-select-check {
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 2px solid var(--border2);
+      background: var(--surface2);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: transparent;
+      transition: background 120ms, border-color 120ms, color 120ms;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .msg-row.msg-selected .msg-select-check {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .msg-row.msg-selected .msg-bubble {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .msg-row.msg-selectable:active { opacity: 0.8; }
+
+    /* =====================================================
+       iOS SAFE KEYBOARD — CSS var updated by visualViewport
+       ===================================================== */
+    body { --keyboard-h: 0px; --reply-banner-h: 0px; }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       SCREEN: LOADING
+       ============================================================ -->
+  <div id="s-loading" class="screen screen-active">
+    <div class="loading-logo">
+      <span class="loading-logo-letter">N</span>
+    </div>
+    <div id="loading-msg">Starting…</div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: WELCOME
+       ============================================================ -->
+  <div id="s-welcome" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="welcome-logo-wrap">
+        <div class="welcome-logo">
+          <span class="welcome-logo-letter">N</span>
+        </div>
+      </div>
+      <div class="welcome-title">Nexus</div>
+      <div class="welcome-sub">Your private, end-to-end encrypted<br>personal messenger</div>
+
+      <div class="feature-list">
+        <div class="feature-item">
+          <div class="feature-icon">&#128274;</div>
+          <div class="feature-text">
+            <strong>End-to-End Encrypted</strong>
+            <span>AES-256 on your device. Firebase sees only ciphertext.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#128241;</div>
+          <div class="feature-text">
+            <strong>All Your Devices</strong>
+            <span>Syncs in real time across phone, tablet, and desktop.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#127760;</div>
+          <div class="feature-text">
+            <strong>Your Own Server</strong>
+            <span>Uses your personal Firebase project — no shared servers.</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">&#128268;</div>
+          <div class="feature-text">
+            <strong>Works Offline</strong>
+            <span>Messages queue locally and send when you reconnect.</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="get-started-btn" class="btn btn-primary">Get Started</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: FIREBASE CONFIG
+       ============================================================ -->
+  <div id="s-firebase" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="onboard-heading">Connect Firebase</div>
+      <div class="onboard-sub">
+        Nexus stores your encrypted messages in your own Firebase Realtime Database.
+        You own the data — we never touch it.
+      </div>
+
+      <button id="firebase-instructions-toggle" class="instructions-toggle">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="7.5" stroke="currentColor"/>
+          <path d="M8 7v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
+        </svg>
+        How to get my Firebase config
+      </button>
+
+      <div id="firebase-instructions" class="instructions-block hidden">
+        <ol>
+          <li>Go to <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a></li>
+          <li>Create a new project (or open an existing one)</li>
+          <li>Click <strong>Add app</strong> and choose <strong>Web (&lt;/&gt;)</strong></li>
+          <li>Register the app — you can skip Firebase Hosting</li>
+          <li>Copy the <code>firebaseConfig</code> object shown on screen</li>
+          <li>In the left sidebar, go to <strong>Build → Realtime Database</strong></li>
+          <li>Click <strong>Create Database</strong>, choose a region, start in <strong>locked mode</strong></li>
+          <li>Go to <strong>Rules</strong> and paste:
+            <br><br>
+            <code>{ "rules": { "accounts": { "$uid": { ".read": "$uid === auth.uid", ".write": "$uid === auth.uid", "messages": { ".indexOn": ["timestamp"] } } } } }</code>
+            <br><br>
+            Then click <strong>Publish</strong>
+          </li>
+          <li>In <strong>Authentication → Sign-in method</strong>, enable <strong>Google</strong></li>
+          <li>Paste your config below</li>
+        </ol>
+      </div>
+
+      <textarea
+        id="firebase-config-input"
+        class="config-textarea"
+        placeholder='{
+  "apiKey": "AIza...",
+  "authDomain": "your-app.firebaseapp.com",
+  "databaseURL": "https://your-app-default-rtdb.firebaseio.com",
+  "projectId": "your-app",
+  "storageBucket": "your-app.appspot.com",
+  "messagingSenderId": "123456789",
+  "appId": "1:123..."
+}'
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+      ></textarea>
+
+      <button id="firebase-next-btn" class="btn btn-primary">Connect &amp; Continue</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: SIGN IN
+       ============================================================ -->
+  <div id="s-signin" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128274;</div>
+      <div class="onboard-heading" style="text-align:center">Sign In</div>
+      <div class="onboard-sub" style="text-align:center">
+        Sign in with Google to sync your encrypted messages across devices.
+        Nexus also requests Google Drive access for media storage in a future update.
+      </div>
+
+      <button id="signin-btn" class="btn btn-google">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+        </svg>
+        Continue with Google
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PASSPHRASE SETUP (new account, first device)
+       ============================================================ -->
+  <div id="s-passphrase-setup" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="onboard-heading">Create Passphrase</div>
+      <div class="onboard-sub">
+        This passphrase encrypts all your messages with AES-256 before they reach Firebase.
+        It is never sent anywhere — only you know it.
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="passphrase-1">Passphrase</label>
+        <div style="position:relative">
+          <input
+            id="passphrase-1"
+            type="password"
+            class="text-input"
+            placeholder="Enter a strong passphrase"
+            autocomplete="new-password"
+            style="margin-bottom:0;padding-right:48px"
+          >
+          <button type="button" class="pw-toggle" aria-label="Show passphrase"
+                  onclick="this.previousElementSibling.type=this.previousElementSibling.type==='password'?'text':'password';this.textContent=this.previousElementSibling.type==='password'?'Show':'Hide'">Show</button>
+        </div>
+        <div class="strength-row">
+          <div class="strength-segs">
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+            <div class="strength-seg"></div>
+          </div>
+          <span id="strength-label"></span>
+        </div>
+      </div>
+
+      <div class="field-group" style="margin-bottom:20px">
+        <label class="field-label" for="passphrase-2">Confirm Passphrase</label>
+        <div style="position:relative">
+          <input
+            id="passphrase-2"
+            type="password"
+            class="text-input"
+            placeholder="Repeat your passphrase"
+            autocomplete="new-password"
+            style="margin-bottom:0;padding-right:48px"
+          >
+          <button type="button" class="pw-toggle" aria-label="Show passphrase"
+                  onclick="this.previousElementSibling.type=this.previousElementSibling.type==='password'?'text':'password';this.textContent=this.previousElementSibling.type==='password'?'Show':'Hide'">Show</button>
+        </div>
+      </div>
+
+      <div class="warning-box">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M8 1L15.5 14H.5L8 1z" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 6v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="8" cy="12" r="0.8" fill="currentColor"/>
+        </svg>
+        <span>There is no recovery option. If you forget this passphrase, your messages cannot be decrypted.</span>
+      </div>
+
+      <button id="passphrase-setup-btn" class="btn btn-primary">Set Passphrase</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PASSPHRASE ENTRY (existing account, new device)
+       ============================================================ -->
+  <div id="s-passphrase-entry" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128272;</div>
+      <div class="onboard-heading" style="text-align:center">New Device</div>
+      <div class="onboard-sub" style="text-align:center">
+        Enter your encryption passphrase to decrypt your messages on this device.
+        This is the passphrase you set when you first created your account.
+      </div>
+
+      <div class="field-group" style="margin-bottom:24px">
+        <label class="field-label" for="passphrase-entry-input">Encryption Passphrase</label>
+        <div style="position:relative">
+          <input
+            id="passphrase-entry-input"
+            type="password"
+            class="text-input"
+            placeholder="Your encryption passphrase"
+            autocomplete="current-password"
+            style="margin-bottom:0;padding-right:48px"
+          >
+          <button type="button" class="pw-toggle" aria-label="Show passphrase"
+                  onclick="this.previousElementSibling.type=this.previousElementSibling.type==='password'?'text':'password';this.textContent=this.previousElementSibling.type==='password'?'Show':'Hide'">Show</button>
+        </div>
+      </div>
+
+      <button id="passphrase-entry-btn" class="btn btn-primary">Decrypt &amp; Continue</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: PIN SETUP
+       ============================================================ -->
+  <div id="s-pin-setup" class="screen hidden">
+    <div style="width:100%;max-width:var(--max-w);padding:56px 32px 40px;display:flex;flex-direction:column;align-items:center;flex:1">
+      <div class="onboard-heading" style="text-align:center;margin-bottom:6px">Set Up Lock</div>
+      <p id="pin-setup-prompt" style="font-size:15px;color:var(--text-dim);text-align:center;margin-bottom:40px">
+        Create a 6-digit PIN
+      </p>
+
+      <div id="pin-setup-dots-row" class="pin-display" style="margin-bottom:44px">
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+        <div class="pin-setup-dot"></div>
+      </div>
+
+      <!-- Tap to type button -->
+      <button id="setup-keyboard-btn" class="keyboard-btn" style="margin-bottom:16px">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <rect x="1" y="4" width="14" height="8" rx="1.5"/>
+          <path d="M4 7h1M7.5 7h1M11 7h1M4 10h8" stroke-linecap="round"/>
+        </svg>
+        Tap to type PIN
+      </button>
+
+      <!-- Hidden input for keyboard entry -->
+      <input
+        id="setup-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="off"
+        aria-label="Enter PIN"
+        style="position:fixed;opacity:0;width:1px;height:1px;top:50%;left:50%;pointer-events:none;"
+      >
+
+      <!-- Desktop hint -->
+      <div id="setup-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (mobile only) -->
+      <div id="setup-numpad" class="pin-grid">
+        <button class="pin-key pin-setup-key" data-val="1">1</button>
+        <button class="pin-key pin-setup-key" data-val="2">2</button>
+        <button class="pin-key pin-setup-key" data-val="3">3</button>
+        <button class="pin-key pin-setup-key" data-val="4">4</button>
+        <button class="pin-key pin-setup-key" data-val="5">5</button>
+        <button class="pin-key pin-setup-key" data-val="6">6</button>
+        <button class="pin-key pin-setup-key" data-val="7">7</button>
+        <button class="pin-key pin-setup-key" data-val="8">8</button>
+        <button class="pin-key pin-setup-key" data-val="9">9</button>
+        <button class="pin-key key-empty" disabled aria-hidden="true"></button>
+        <button class="pin-key pin-setup-key" data-val="0">0</button>
+        <button class="pin-key pin-setup-key key-back" data-val="back" aria-label="Delete">&#9003;</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: BIOMETRICS SETUP
+       ============================================================ -->
+  <div id="s-biometrics-setup" class="screen screen-onboard hidden">
+    <div class="onboard-inner" style="text-align:center">
+      <div class="bio-icon-wrap">&#128400;</div>
+      <div class="onboard-heading">Biometric Lock</div>
+
+      <!-- Shown when biometrics are available -->
+      <div id="bio-setup-available">
+        <div class="onboard-sub">
+          Use your fingerprint or face to unlock Nexus instantly.
+          Your biometric data stays on this device — Nexus never sees it.
+        </div>
+        <button id="bio-setup-btn" class="btn btn-primary" style="margin-bottom:10px">
+          Enable Biometrics
+        </button>
+        <button id="bio-skip-btn" class="btn btn-ghost">Skip for Now</button>
+      </div>
+
+      <!-- Shown when biometrics are unavailable -->
+      <div id="bio-setup-unavailable" class="hidden">
+        <div class="onboard-sub">
+          Biometrics are not available on this device or browser.
+          You can always use your PIN to unlock.
+        </div>
+        <button id="bio-skip-btn-2" class="btn btn-primary">Continue with PIN</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: DEVICE NAME
+       ============================================================ -->
+  <div id="s-device-name" class="screen screen-onboard hidden">
+    <div class="onboard-inner">
+      <div class="signin-lock-icon">&#128241;</div>
+      <div class="onboard-heading" style="text-align:center">Choose a Username</div>
+      <div class="onboard-sub" style="text-align:center">
+        This is the name that appears next to your messages.
+        You can change it anytime in settings.
+      </div>
+
+      <div class="field-group" style="margin-bottom:28px">
+        <label class="field-label" for="device-name-input">Device Name</label>
+        <input
+          id="device-name-input"
+          type="text"
+          class="text-input"
+          placeholder="e.g. Mit's iPhone"
+          autocomplete="off"
+          maxlength="40"
+        >
+      </div>
+
+      <button id="device-name-done-btn" class="btn btn-primary">Start Messaging</button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: LOCK
+       ============================================================ -->
+  <div id="s-lock" class="screen hidden" style="justify-content:center;align-items:center">
+    <div class="lock-inner">
+      <div id="lock-avatar" class="lock-avatar">?</div>
+      <div id="lock-name" class="lock-name"></div>
+      <div id="lock-email" class="lock-email">Loading…</div>
+
+      <div class="lock-prompt">Enter PIN to unlock</div>
+
+      <div id="pin-dots-row">
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+      </div>
+
+      <!-- Hidden input — receives keyboard typing on desktop,
+           triggers numeric system keyboard on mobile -->
+      <input
+        id="lock-pin-input"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        maxlength="6"
+        autocomplete="one-time-code"
+        aria-label="Enter PIN"
+        style="position:fixed;opacity:0;width:1px;height:1px;top:50%;left:50%;pointer-events:none;"
+      >
+
+      <!-- Desktop hint (shown instead of numpad) -->
+      <div id="lock-keyboard-hint" class="hidden" style="font-size:14px;color:var(--text-dim);text-align:center;margin-bottom:12px;">
+        Type your PIN on the keyboard
+      </div>
+
+      <!-- On-screen numpad (shown on mobile, hidden on desktop) -->
+      <div id="lock-numpad" class="pin-grid">
+        <button class="pin-key pin-lock-key" data-val="1">1</button>
+        <button class="pin-key pin-lock-key" data-val="2">2</button>
+        <button class="pin-key pin-lock-key" data-val="3">3</button>
+        <button class="pin-key pin-lock-key" data-val="4">4</button>
+        <button class="pin-key pin-lock-key" data-val="5">5</button>
+        <button class="pin-key pin-lock-key" data-val="6">6</button>
+        <button class="pin-key pin-lock-key" data-val="7">7</button>
+        <button class="pin-key pin-lock-key" data-val="8">8</button>
+        <button class="pin-key pin-lock-key" data-val="9">9</button>
+        <button class="pin-key key-empty" disabled aria-hidden="true"></button>
+        <button class="pin-key pin-lock-key" data-val="0">0</button>
+        <button class="pin-key pin-lock-key key-back" data-val="back" aria-label="Delete">&#9003;</button>
+      </div>
+
+      <!-- Tap to type button -->
+      <button id="lock-keyboard-btn" class="keyboard-btn">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <rect x="1" y="4" width="14" height="8" rx="1.5"/>
+          <path d="M4 7h1M7.5 7h1M11 7h1M4 10h8" stroke-linecap="round"/>
+        </svg>
+        Tap to type PIN
+      </button>
+
+      <!-- Biometrics button -->
+      <button id="lock-bio-btn" class="bio-btn hidden" aria-label="Unlock with biometrics">
+        &#128400;
+      </button>
+      <div id="lock-bio-hint" class="lock-bio-hint hidden">
+        Or use fingerprint / face to unlock
+      </div>
+
+      <!-- Shown after 5 failed PIN attempts as an escape hatch -->
+      <button id="lock-use-passphrase-btn" class="btn btn-ghost hidden"
+              style="margin-top:14px;font-size:13px;opacity:0.85">
+        Forgot PIN? Use passphrase instead
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       SCREEN: APP (Chat)
+       ============================================================ -->
+  <div id="s-app" class="screen hidden">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div id="header-avatar" class="header-avatar" title="Switch account">?</div>
+
+      <div class="header-info">
+        <div class="header-title-row">
+          <span id="header-title" class="header-title">Nexus</span>
+          <span id="status-dot" class="status-dot" title="Connected"></span>
+        </div>
+        <div id="header-sub" class="header-sub hidden"></div>
+      </div>
+
+      <div class="header-actions">
+        <button id="header-search-btn" class="icon-btn" title="Search" aria-label="Search messages">
+          <svg width="19" height="19" viewBox="0 0 19 19" fill="none" stroke="currentColor" stroke-width="1.7">
+            <circle cx="8" cy="8" r="5.5"/><path d="M13 13l4 4" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="header-settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="10" cy="10" r="2.5"/>
+            <path d="M10 2.5v1M10 16.5v1M2.5 10h1M16.5 10h1M4.7 4.7l.7.7M14.6 14.6l.7.7M4.7 15.3l.7-.7M14.6 5.4l.7-.7"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Upload Progress Bar (hidden until a media upload is in progress) -->
+    <div id="upload-progress-wrap" class="upload-progress-wrap hidden">
+      <div class="upload-progress-inner">
+        <span class="upload-progress-label">Uploading…</span>
+        <div class="upload-progress-track">
+          <div id="upload-progress-fill" class="upload-progress-fill"></div>
+        </div>
+        <span id="upload-progress-pct" class="upload-progress-pct">0%</span>
+        <button id="upload-cancel-btn" class="upload-cancel-btn">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Chat area: wallpaper layers go here so they never leak outside this wrapper -->
+    <div id="chat-area">
+      <div id="messages-list" class="messages-list">
+        <div class="empty-state">
+          <div class="empty-icon">&#128274;</div>
+          <div class="empty-title">No messages yet</div>
+          <div class="empty-sub">Messages are encrypted end-to-end.<br>Only your devices can read them.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Typing indicator -->
+    <div id="typing-indicator" class="typing-indicator hidden"></div>
+
+    <!-- Input area -->
+    <div class="input-area">
+      <!-- Hidden file input -->
+      <input id="file-input" type="file"
+             accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+             style="display:none" aria-hidden="true">
+      <!-- Attach button -->
+      <button id="attach-btn" class="attach-btn" title="Send file" aria-label="Attach file">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M15.5 8.5l-7 7a4.5 4.5 0 0 1-6.364-6.364l7-7a3 3 0 0 1 4.243 4.243l-7 7a1.5 1.5 0 0 1-2.121-2.121l6.293-6.293"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <textarea
+        id="msg-input"
+        class="msg-input"
+        placeholder="Message"
+        rows="1"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="sentences"
+        spellcheck="true"
+        enterkeyhint="send"
+      ></textarea>
+      <button id="send-btn" class="send-btn" title="Send (Enter)" aria-label="Send">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M16 9L2 2l2.5 7L2 16l14-7z" fill="white"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- PWA install -->
+
+  </div><!-- end #s-app -->
+
+
+  <!-- ============================================================
+       OVERLAY: ACCOUNT SWITCHER
+       ============================================================ -->
+  <div id="overlay-accounts" class="overlay hidden">
+    <div class="overlay-panel">
+      <div class="overlay-handle"></div>
+      <div class="overlay-header">
+        <span class="overlay-title">Accounts</span>
+        <button id="account-overlay-close" class="icon-btn" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4l10 10M14 4L4 14" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="account-list">
+        <!-- Populated by app.js -->
+      </div>
+
+      <div class="overlay-footer">
+        <button id="add-account-btn" class="btn btn-ghost btn-sm">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="8" cy="8" r="7"/>
+            <path d="M8 5v6M5 8h6" stroke-linecap="round"/>
+          </svg>
+          Add Account
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       OVERLAY: SETTINGS
+       ============================================================ -->
+  <div id="overlay-settings" class="overlay hidden">
+    <div class="overlay-panel">
+      <div class="overlay-handle"></div>
+      <div class="overlay-header">
+        <span class="overlay-title">Settings</span>
+        <button id="settings-close-btn" class="icon-btn" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4l10 10M14 4L4 14" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Profile -->
+      <div class="settings-section">
+        <div class="settings-section-title">Profile</div>
+        <div class="profile-pic-row">
+          <div id="settings-avatar-preview" class="settings-avatar-preview">?</div>
+          <div class="profile-pic-btns">
+            <button id="settings-avatar-btn" class="btn btn-ghost btn-sm">Change Photo</button>
+            <button id="settings-avatar-remove-btn" class="btn btn-ghost btn-sm hidden">Remove</button>
+          </div>
+        </div>
+        <input id="avatar-file-input" type="file" accept="image/*" style="display:none" aria-hidden="true">
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Theme -->
+      <div class="settings-section">
+        <div class="settings-section-title">Theme</div>
+        <div id="theme-grid" class="theme-grid">
+          <!-- Populated by app.js -->
+        </div>
+
+        <!-- Accent colour override -->
+        <div class="color-row">
+          <label>Accent Colour</label>
+          <div class="color-picker-group">
+            <input type="color" id="settings-accent-color" class="color-swatch" value="#8b5cf6" title="Pick accent colour">
+            <button id="settings-accent-reset" class="btn-color-reset">Reset</button>
+          </div>
+        </div>
+
+        <!-- Own bubble colour override -->
+        <div class="color-row">
+          <label>My Bubbles</label>
+          <div class="color-picker-group">
+            <input type="color" id="settings-own-bubble-color" class="color-swatch" value="#6d44d4" title="Pick bubble colour">
+            <button id="settings-own-bubble-reset" class="btn-color-reset">Reset</button>
+          </div>
+        </div>
+
+        <!-- Received bubble colour override -->
+        <div class="color-row">
+          <label>Received Bubbles</label>
+          <div class="color-picker-group">
+            <input type="color" id="settings-other-bubble-color" class="color-swatch" value="#141422" title="Pick received bubble colour">
+            <button id="settings-other-bubble-reset" class="btn-color-reset">Reset</button>
+          </div>
+        </div>
+
+        <!-- Wallpaper -->
+        <div class="wallpaper-row">
+          <label>Wallpaper</label>
+          <div class="wallpaper-controls">
+            <button id="settings-wallpaper-btn" class="btn btn-ghost btn-sm">Image</button>
+            <button id="settings-slideshow-btn" class="btn btn-ghost btn-sm">Slideshow</button>
+            <button id="settings-video-wall-btn" class="btn btn-ghost btn-sm">Video</button>
+            <button id="settings-wallpaper-remove" class="btn btn-ghost btn-sm hidden">Remove</button>
+            <img id="settings-wallpaper-preview" class="wallpaper-thumb hidden" src="" alt="Wallpaper preview">
+          </div>
+        </div>
+        <!-- Slideshow quick settings — shown when a slideshow is active -->
+        <div id="slideshow-settings-block" class="hidden" style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          <div class="color-row">
+            <label style="font-size:12px;color:var(--text-muted)">Change every</label>
+            <select id="settings-slideshow-interval" class="settings-select" style="max-width:100px">
+              <option value="5">5 sec</option>
+              <option value="15">15 sec</option>
+              <option value="30" selected>30 sec</option>
+              <option value="60">1 min</option>
+              <option value="300">5 min</option>
+            </select>
+          </div>
+          <div class="color-row">
+            <label style="font-size:12px;color:var(--text-muted)">Transition</label>
+            <select id="settings-slideshow-transition" class="settings-select" style="max-width:130px">
+              <option value="crossfade">Crossfade</option>
+              <option value="slide">Slide</option>
+              <option value="zoom">Zoom</option>
+              <option value="waterdrop">Waterdrop ✦</option>
+            </select>
+          </div>
+          <div class="color-row">
+            <label style="font-size:12px;color:var(--text-muted)">Speed</label>
+            <select id="settings-slideshow-duration" class="settings-select" style="max-width:130px">
+              <option value="300">Fast (0.3s)</option>
+              <option value="600">Normal (0.6s)</option>
+              <option value="800" selected>Smooth (0.8s)</option>
+              <option value="1200">Slow (1.2s)</option>
+              <option value="2000">Very slow (2s)</option>
+            </select>
+          </div>
+          <!-- Waterdrop origin — shown only when Waterdrop transition is active -->
+          <div id="slideshow-waterdrop-row" class="hidden" style="display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Waterdrop origin</label>
+            <!-- Visual click-to-set origin picker -->
+            <div id="waterdrop-origin-picker"
+                 title="Click to set origin"
+                 style="width:100%;height:52px;border-radius:var(--radius-sm);border:1.5px solid var(--border2);
+                        background:var(--surface2);cursor:crosshair;position:relative;overflow:hidden">
+              <div id="waterdrop-origin-dot"
+                   style="position:absolute;width:10px;height:10px;border-radius:50%;
+                          background:var(--accent);transform:translate(-50%,-50%);
+                          box-shadow:0 0 0 2px rgba(255,255,255,0.5);
+                          left:50%;top:50%;pointer-events:none"></div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <label style="font-size:11px;color:var(--text-muted)">X</label>
+              <input type="range" id="settings-waterdrop-x" min="0" max="100" value="50"
+                     style="flex:1;accent-color:var(--accent)">
+              <span id="waterdrop-x-val" style="font-size:11px;color:var(--text-dim);min-width:28px">50%</span>
+              <label style="font-size:11px;color:var(--text-muted)">Y</label>
+              <input type="range" id="settings-waterdrop-y" min="0" max="100" value="50"
+                     style="flex:1;accent-color:var(--accent)">
+              <span id="waterdrop-y-val" style="font-size:11px;color:var(--text-dim);min-width:28px">50%</span>
+            </div>
+          </div>
+        </div>
+        <input id="wallpaper-file-input"   type="file" accept="image/*"                style="display:none" aria-hidden="true">
+        <input id="slideshow-file-input"   type="file" accept="image/*" multiple       style="display:none" aria-hidden="true">
+        <input id="video-wall-file-input"  type="file" accept="video/*"                style="display:none" aria-hidden="true">
+
+        <!-- Message animation style -->
+        <div class="color-row" style="margin-top:14px">
+          <label>Message Animation</label>
+          <select id="settings-anim-style" class="settings-select" style="max-width:140px">
+            <option value="fade-up">Fade Up</option>
+            <option value="slide-in">Slide In</option>
+            <option value="pop">Pop</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+
+        <!-- Link previews toggle -->
+        <div class="settings-row" style="margin-top:14px">
+          <label>Link Previews</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="settings-link-previews" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Device -->
+      <div class="settings-section">
+        <div class="settings-section-title">This Device</div>
+        <div class="settings-row">
+          <label for="settings-device-name">Username</label>
+          <input
+            id="settings-device-name"
+            type="text"
+            class="settings-text-input"
+            placeholder="e.g. Mit's iPhone"
+            maxlength="40"
+            autocomplete="off"
+          >
+        </div>
+        <div class="settings-row">
+          <label for="settings-autolock">Auto-Lock</label>
+          <select id="settings-autolock" class="settings-select">
+            <option value="0">Never</option>
+            <option value="1">1 minute</option>
+            <option value="5" selected>5 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label for="settings-font-size">Font Size (px)</label>
+          <input
+            id="settings-font-size"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            class="settings-text-input"
+            min="10" max="24" value="14"
+            style="max-width:70px;text-align:center"
+          >
+        </div>
+        <div style="margin-bottom:16px">
+          <button id="settings-bio-setup-btn" class="btn btn-ghost btn-sm">
+            &#128400; Setup Biometrics
+          </button>
+        </div>
+        <div style="margin-bottom:16px">
+          <button id="settings-change-passphrase-btn" class="btn btn-ghost btn-sm">
+            &#128272; Change Passphrase
+          </button>
+        </div>
+        <div class="settings-row" style="margin-top:12px">
+          <label>Push Notifications</label>
+          <button id="settings-push-btn" class="btn btn-ghost btn-sm">Enable</button>
+        </div>
+        <div id="settings-push-status" class="settings-hint" style="margin-top:4px"></div>
+
+        <!-- Firebase performance notice — shown once until dismissed -->
+        <div id="firebase-index-notice" class="settings-hint hidden"
+             style="margin-top:12px;padding:10px 12px;background:var(--surface3,var(--surface2));border:1px solid var(--border2);border-radius:var(--radius);line-height:1.55">
+          ⚠️ <strong>Firebase index missing.</strong>
+          Without a <code>timestamp</code> index, Firebase downloads <em>all</em> messages
+          to the client before filtering — performance will degrade as history grows.
+          In your Firebase console → Realtime Database → Rules, add:<br>
+          <code style="display:block;margin:6px 0 2px;white-space:pre-wrap;font-size:11px">{
+  "rules": {
+    "accounts": {
+      "$uid": {
+        "messages": { ".indexOn": ["timestamp"] }
+      }
+    }
+  }
+}</code>
+          <button id="firebase-index-dismiss-btn"
+                  class="btn btn-ghost btn-sm"
+                  style="margin-top:8px;font-size:12px">Got it — dismiss</button>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Storage / Spine Link -->
+      <div class="settings-section">
+        <div class="settings-section-title">Storage (Spine Link)</div>
+        <div id="storage-summary" style="margin-bottom:14px">
+          <div class="storage-empty">Loading…</div>
+        </div>
+        <button id="settings-add-drive-btn" class="btn btn-ghost btn-sm" style="margin-bottom:4px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="7" cy="7" r="6"/><path d="M7 4v6M4 7h6" stroke-linecap="round"/>
+          </svg>
+          Add Drive Account
+        </button>
+        <button id="settings-migrate-btn" class="btn btn-ghost btn-sm" style="margin-top:4px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M2 7h10M8 3l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Migrate Files…
+        </button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Linked Devices -->
+      <div class="settings-section">
+        <div class="settings-section-title">Linked Devices</div>
+        <div id="devices-list">
+          <div class="storage-empty">Loading devices…</div>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Data / Export -->
+      <div class="settings-section">
+        <div class="settings-section-title">Data</div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Export Chat</div>
+            <div class="settings-hint">Download all messages as a JSON file. Decrypted on-device only.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button id="export-json-btn" class="btn btn-ghost btn-sm">Export JSON</button>
+          <button id="export-txt-btn"  class="btn btn-ghost btn-sm">Export Text</button>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Account -->
+      <div class="settings-section" style="padding-bottom:24px">
+        <div class="settings-section-title">Account</div>
+        <button id="settings-signout-btn" class="btn btn-danger btn-sm">
+          Sign Out
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TOAST
+       ============================================================ -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+
+  <!-- ============================================================
+       SCRIPTS
+       Firebase SDK loads as ES modules; app.js imports from them.
+       ============================================================ -->
+  <script type="module" src="./src/app.js"></script>
+
+
+
+
+</body>
+</html>
