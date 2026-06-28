@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a0a2e"/>
+    </linearGradient>
+    <linearGradient id="letter" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+  <!-- Subtle inner glow -->
+  <rect width="512" height="512" rx="115" fill="none" stroke="#8b5cf6" stroke-width="2" opacity="0.3"/>
+  <!-- N letterform with glow -->
+  <text x="256" y="370"
+        text-anchor="middle"
+        font-family="'Arial Black', 'Helvetica Neue', sans-serif"
+        font-weight="900"
+        font-size="340"
+        fill="url(#letter)"
+        filter="url(#glow)">N</text>
+</svg>
