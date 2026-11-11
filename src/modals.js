@@ -547,6 +547,11 @@ export async function showMediaPreview(file, S, onConfirm) {
       if (f && cb) cb(f, caption);
     });
     document.getElementById('mp-caption').addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMediaPreview();
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const caption = document.getElementById('mp-caption')?.value?.trim() || null;

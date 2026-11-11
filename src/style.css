@@ -1423,6 +1423,27 @@
       padding: 3px 10px;
     }
 
+    .account-remove-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      transition: all var(--transition);
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .account-remove-btn:hover {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+    }
+
     .overlay-footer {
       padding: 12px 20px 16px;
       border-top: 1px solid var(--border);

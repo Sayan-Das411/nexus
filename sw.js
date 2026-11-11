@@ -1,7 +1,7 @@
 // Nexus Service Worker — Phase 1
 // Handles: app shell caching, offline fallback, background sync for message queue
 
-const CACHE_NAME = 'nexus-shell-v7';
+const CACHE_NAME = 'nexus-shell-v8';
 
 // Files that make up the app shell — cached on install
 const APP_SHELL = [

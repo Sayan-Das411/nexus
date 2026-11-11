@@ -7,7 +7,7 @@ import { deriveKey, generateSalt, encrypt, decrypt,
          createVerificationVector, verifyKey, passphraseStrength }
   from './crypto.js';
 import { initFirebase, signInWithGoogle, getCurrentAccount, listAccounts,
-         signOut, switchToAccount, updateDeviceName,
+         signOut, switchToAccount, removeLocalAccount, updateDeviceName,
          getDefaultDeviceName, detectPlatform, detectBrowser, browserLabel,
          platformIcon, getFirebaseApp }
   from './auth.js';
@@ -322,12 +322,13 @@ function applyLockout(until) {
   clearTimeout(_lockoutTimer);
   const update = () => {
     const rem = Math.ceil((until - Date.now()) / 1000);
+    const errEl = $('lock-error');
     if (rem <= 0) {
-      $('lock-error').textContent = '';
+      if (errEl) errEl.textContent = '';
       enablePINInputs(true);
       return;
     }
-    $('lock-error').textContent = `Too many attempts. Try again in ${rem}s.`;
+    if (errEl) errEl.textContent = `Too many attempts. Try again in ${rem}s.`;
     enablePINInputs(false);
     _lockoutTimer = setTimeout(update, 1000);
   };
@@ -405,7 +406,8 @@ async function submitPIN() {
       applyLockout(lockedUntil);
     } else {
       const remaining = 5 - attempts;
-      $('lock-error').textContent = `Incorrect PIN. ${remaining} attempt${remaining > 1 ? 's' : ''} left.`;
+      const errEl = $('lock-error');
+      if (errEl) errEl.textContent = `Incorrect PIN. ${remaining} attempt${remaining > 1 ? 's' : ''} left.`;
     }
     await lockStore.set(S.uid, { ...ld, failedAttempts: attempts, lockedUntil });
 
@@ -618,6 +620,7 @@ async function startChat() {
 function clearUnsubscribers() {
   S.unsubscribers.forEach(fn => { try { fn(); } catch {} });
   S.unsubscribers = [];
+  S.messages = [];
   _renderedMsgs.clear();
   _deviceAvatarCache.clear();
   S.pendingMessages.clear();
@@ -627,6 +630,10 @@ function clearUnsubscribers() {
   P4.editingMsgId = null;
   P4.replyToMsg   = null;
   hideReplyEditBanner();
+  const list = $('messages-list');
+  if (list) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">&#128172;</div><div class="empty-text">No messages yet</div><div class="empty-sub">Send a message to begin</div></div>';
+  }
 }
 
 // ============================================================
@@ -1471,11 +1478,27 @@ async function openAccountSwitcher() {
         <div class="account-email">${escHtml(a.email)}</div>
         <div class="account-device">${platformIcon(a.platform ?? 'unknown')} ${escHtml(a.deviceName)}</div>
       </div>
-      ${a.isCurrentAccount ? '<div class="account-current-badge">Active</div>' : ''}
+      ${a.isCurrentAccount
+        ? '<div class="account-current-badge">Active</div>'
+        : `<button class="account-remove-btn" data-remove-uid="${escHtml(a.uid)}" title="Remove account from this device" aria-label="Remove account">&times;</button>`
+      }
     </div>`
   ).join('');
 
-  list.onclick = e => {
+  list.onclick = async e => {
+    const remBtn = e.target.closest('[data-remove-uid]');
+    if (remBtn) {
+      e.stopPropagation();
+      const targetUid = remBtn.dataset.removeUid;
+      const targetAcc = accounts.find(a => a.uid === targetUid);
+      const name = targetAcc?.displayName || targetAcc?.email || 'this account';
+      if (await nexusConfirm(`Remove ${name} from this device? Local encryption keys and cache for this account will be erased.`, { confirmLabel: 'Remove', danger: true })) {
+        await removeLocalAccount(targetUid);
+        toast('Account removed');
+        await openAccountSwitcher();
+      }
+      return;
+    }
     const row = e.target.closest('[data-switch-uid]');
     if (row) window.Nexus.switchAccount(row.dataset.switchUid);
   };
@@ -1934,9 +1957,12 @@ function advancePINSetup() {
     _pinSetupFirst  = _pinSetupBuffer;
     _pinSetupBuffer = '';
     _pinSetupStage  = 'confirm';
-    $('pin-setup-title').textContent = 'Confirm your PIN';
-    $('pin-setup-sub').textContent   = 'Enter the same 6-digit PIN once more';
-    $('setup-pin-input').value       = '';
+    const titleEl = $('pin-setup-title');
+    const subEl   = $('pin-setup-sub');
+    if (titleEl) titleEl.textContent = 'Confirm your PIN';
+    if (subEl)   subEl.textContent   = 'Enter the same 6-digit PIN once more';
+    const inp = $('setup-pin-input');
+    if (inp) inp.value = '';
     updatePINSetupDots();
   } else {
     if (_pinSetupBuffer === _pinSetupFirst) {
@@ -2278,9 +2304,14 @@ function startReply(msg) {
   const rawText    = msg._decryptedText ?? '';
   const isMediaMsg = (msg.type === 'image' || msg.type === 'file');
   const isMetaJson = isMediaMsg && rawText.startsWith('{');
-  const displayText = isMetaJson || !rawText
+  const isVideo    = msg.mimeType?.startsWith('video/');
+  const isAudio    = msg.mimeType?.startsWith('audio/');
+  const mediaLabel = isVideo ? `🎬 ${msg.fileName ?? 'Video'}`
+                   : isAudio ? `🎵 ${msg.fileName ?? 'Audio'}`
+                   : `📎 ${msg.fileName ?? 'File'}`;
+  const displayText = isMediaJson || !rawText
     ? (msg.type === 'image' ? (msg.caption ? `📷 Photo: ${msg.caption}` : '📷 Photo')
-     : msg.type === 'file'  ? (msg.caption ? `📎 ${msg.fileName}: ${msg.caption}` : `📎 ${msg.fileName ?? 'File'}`)
+     : msg.type === 'file'  ? (msg.caption ? `${mediaLabel}: ${msg.caption}` : mediaLabel)
      : '…')
     : rawText;
 
@@ -2298,7 +2329,11 @@ function cancelReplyEdit() {
   P4.editingMsgId = null;
   P4.replyToMsg   = null;
   hideReplyEditBanner();
-  if (wasEditing) { $('msg-input').value = ''; autoResizeInput(); }
+  if (wasEditing) {
+    $('msg-input').value = '';
+    autoResizeInput();
+    if (S.uid) drafts.delete(S.uid).catch(() => {});
+  }
 }
 
 let _bannerObserver = null;
@@ -2638,6 +2673,7 @@ function bindEvents() {
       else onPINSetupDigit(val);
     });
   });
+  $('setup-keyboard-btn')?.addEventListener('click', () => $('setup-pin-input')?.focus());
   $('setup-pin-input')?.addEventListener('input', onSetupPINInput);
   $('setup-pin-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && _pinSetupBuffer.length === 6) advancePINSetup();
@@ -2657,14 +2693,10 @@ function bindEvents() {
       else onPINDigit(val);
     });
   });
+  $('lock-keyboard-btn')?.addEventListener('click', () => $('lock-pin-input')?.focus());
   $('lock-pin-input')?.addEventListener('input', onLockPINInput);
   $('lock-pin-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && _pinBuffer.length > 0) submitPIN();
-    if (e.key === 'Backspace') {
-      onPINBackspace();
-      const inp = $('lock-pin-input');
-      if (inp) inp.value = _pinBuffer;
-    }
   });
   $('lock-bio-btn')?.addEventListener('click', attemptBiometricUnlock);
 
@@ -3040,11 +3072,18 @@ function bindEvents() {
   // Keyboard Escape cascade
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      const mp = document.getElementById('media-preview-overlay');
+      if (mp && !mp.classList.contains('hidden')) { closeMediaPreview(); return; }
       if (document.getElementById('ctx-menu')) { closeContextMenu(); return; }
       const lb = document.getElementById('media-lightbox');
       if (lb && !lb.classList.contains('hidden')) { lb.querySelector('.lb-close')?.click(); return; }
       const modal = document.querySelector('.migrate-modal, #crop-overlay, #nexus-confirm-overlay, #nexus-prompt-overlay, #pcp-modal, #slideshow-editor-modal');
-      if (modal) { modal.remove(); return; }
+      if (modal) {
+        const cancelBtn = modal.querySelector('.btn-ghost, .cancel-btn');
+        if (cancelBtn) cancelBtn.click();
+        else modal.remove();
+        return;
+      }
       if (SEL.active) { exitSelectMode(); return; }
       if (P4.editingMsgId || P4.replyToMsg) { cancelReplyEdit(); return; }
       const hdr = document.querySelector('.app-header');
@@ -3063,13 +3102,21 @@ function pushBackEntry() {
 }
 
 function handleBackGesture() {
+  const mp = document.getElementById('media-preview-overlay');
+  if (mp && !mp.classList.contains('hidden')) { closeMediaPreview(); return true; }
+
   if (document.getElementById('ctx-menu')) { closeContextMenu(); return true; }
 
   const lb = document.getElementById('media-lightbox');
   if (lb && !lb.classList.contains('hidden')) { lb.querySelector('.lb-close')?.click(); return true; }
 
   const modal = document.querySelector('.migrate-modal, #crop-overlay, #nexus-confirm-overlay, #nexus-prompt-overlay, #pcp-modal, #slideshow-editor-modal');
-  if (modal) { modal.remove(); return true; }
+  if (modal) {
+    const cancelBtn = modal.querySelector('.btn-ghost, .cancel-btn');
+    if (cancelBtn) cancelBtn.click();
+    else modal.remove();
+    return true;
+  }
 
   if (SEL.active) { exitSelectMode(); return true; }
   if (P4.editingMsgId || P4.replyToMsg) { cancelReplyEdit(); return true; }

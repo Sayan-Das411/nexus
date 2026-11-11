@@ -160,8 +160,13 @@ export function buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers,
       const rawDecrypted = quoted._decryptedText ?? '';
       const isMediaJson  = (type === 'image' || type === 'file') && rawDecrypted.startsWith('{');
       if (isMediaJson || !rawDecrypted) {
-        qText = type === 'image' ? '📷 Photo'
-              : type === 'file'  ? `📎 ${escHtml(quoted.fileName ?? 'File')}`
+        const isVideo = quoted.mimeType?.startsWith('video/');
+        const isAudio = quoted.mimeType?.startsWith('audio/');
+        const mediaLabel = isVideo ? `🎬 ${escHtml(quoted.fileName ?? 'Video')}`
+                         : isAudio ? `🎵 ${escHtml(quoted.fileName ?? 'Audio')}`
+                         : `📎 ${escHtml(quoted.fileName ?? 'File')}`;
+        qText = type === 'image' ? (quoted.caption ? `📷 Photo: ${escHtml(quoted.caption)}` : '📷 Photo')
+              : type === 'file'  ? (quoted.caption ? `${mediaLabel}: ${escHtml(quoted.caption)}` : mediaLabel)
               : '…';
       } else {
         qText = escHtml(rawDecrypted.slice(0, 80));
@@ -579,7 +584,7 @@ export function openContextMenu(row, e, S, onStartReply, onStartEdit, onConfirmD
 
   actions.push({ label: 'Delete', danger: true, fn: () => onConfirmDelete(msgId) });
 
-  if (msg.uuid && (msg.type === 'image' || msg.type === 'file')) {
+  if (msg.uuid) {
     actions.push({ label: 'Download', fn: () => onOpenMedia(msg.uuid) });
   }
 
