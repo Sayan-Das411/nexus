@@ -499,8 +499,13 @@ export function openVideoEditor(S, onRemoved) {
 let _pendingMediaFile = null;
 let _pendingOnConfirm = null;
 
-export function showMediaPreview(file, S, onConfirm) {
+export async function showMediaPreview(file, S, onConfirm) {
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
+  if (!S.spineConfig?.accounts?.length && S.uid) {
+    try {
+      S.spineConfig = await getSpineConfig(S.uid);
+    } catch {}
+  }
   if (!S.spineConfig?.accounts?.length) {
     toast('No Drive accounts linked. Add one in Settings → Storage.');
     return;

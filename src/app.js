@@ -2702,11 +2702,7 @@ function bindEvents() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    const isPreviewable = file.type.startsWith('image/') ||
-                          file.type.startsWith('video/') ||
-                          file.type.startsWith('audio/');
-    if (isPreviewable) showMediaPreview(file, S, handleMediaSend);
-    else               await handleMediaSend(file);
+    showMediaPreview(file, S, handleMediaSend);
   });
   $('upload-cancel-btn')?.addEventListener('click', cancelCurrentUpload);
 
@@ -2748,11 +2744,7 @@ function bindEvents() {
       toast('No Drive accounts linked. Add one in Settings → Storage.');
       return;
     }
-    const isPreviewable = file.type.startsWith('image/') ||
-                          file.type.startsWith('video/') ||
-                          file.type.startsWith('audio/');
-    if (isPreviewable) showMediaPreview(file, S, handleMediaSend);
-    else               handleMediaSend(file);
+    showMediaPreview(file, S, handleMediaSend);
   });
 
   // Settings Panel events
