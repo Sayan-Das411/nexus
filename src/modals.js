@@ -504,8 +504,8 @@ export function openVideoEditor(S, onRemoved) {
 // ============================================================
 // MEDIA PREVIEW DIALOG (WITH CAPTION SUPPORT)
 // ============================================================
-let _pendingMediaFile = null;
-let _pendingOnConfirm = null;
+let _pendingMediaFiles = [];
+let _pendingOnConfirm  = null;
 
 export function isCompressibleMedia(file) {
   if (!file?.type) return false;
@@ -516,7 +516,7 @@ export function isCompressibleMedia(file) {
   return false;
 }
 
-export async function showMediaPreview(file, S, onConfirm) {
+export async function showMediaPreview(filesOrFile, S, onConfirm) {
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
   if (!S.spineConfig?.accounts?.length && S.uid) {
     try {
@@ -527,7 +527,10 @@ export async function showMediaPreview(file, S, onConfirm) {
     toast('No Drive accounts linked. Add one in Settings → Storage.');
     return;
   }
-  _pendingMediaFile = file;
+
+  const rawList = Array.isArray(filesOrFile) ? filesOrFile : [filesOrFile];
+  _pendingMediaFiles = rawList.filter(Boolean);
+  if (!_pendingMediaFiles.length) return;
   _pendingOnConfirm = onConfirm;
 
   let overlay = document.getElementById('media-preview-overlay');
@@ -563,10 +566,10 @@ export async function showMediaPreview(file, S, onConfirm) {
     document.getElementById('mp-send').addEventListener('click', () => {
       const caption = document.getElementById('mp-caption')?.value?.trim() || null;
       const isOriginal = document.getElementById('mp-quality-toggle')?.checked || false;
-      const f  = _pendingMediaFile;
+      const files = [..._pendingMediaFiles];
       const cb = _pendingOnConfirm;
       closeMediaPreview();
-      if (f && cb) cb(f, caption, { isOriginal });
+      if (files.length && cb) cb(files, caption, { isOriginal });
     });
     document.getElementById('mp-caption').addEventListener('keydown', e => {
       if (e.key === 'Escape') {
@@ -578,62 +581,137 @@ export async function showMediaPreview(file, S, onConfirm) {
         e.preventDefault();
         const caption = document.getElementById('mp-caption')?.value?.trim() || null;
         const isOriginal = document.getElementById('mp-quality-toggle')?.checked || false;
-        const f  = _pendingMediaFile;
+        const files = [..._pendingMediaFiles];
         const cb = _pendingOnConfirm;
         closeMediaPreview();
-        if (f && cb) cb(f, caption, { isOriginal });
+        if (files.length && cb) cb(files, caption, { isOriginal });
       }
     });
   }
 
-  const qualitySetting = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
-  const isCompressible = isCompressibleMedia(file);
-  const qualityWrap = document.getElementById('mp-quality-wrap');
-  const qualityToggle = document.getElementById('mp-quality-toggle');
-
-  if (qualityWrap && qualityToggle) {
-    if (qualitySetting === 'ask' && isCompressible) {
-      qualityWrap.classList.remove('hidden');
-      qualityToggle.checked = false;
-    } else if (qualitySetting === 'original' && isCompressible) {
-      qualityWrap.classList.add('hidden');
-      qualityToggle.checked = true;
-    } else {
-      qualityWrap.classList.add('hidden');
-      qualityToggle.checked = false;
+  const updateGalleryOrSingle = async () => {
+    if (!_pendingMediaFiles.length) {
+      closeMediaPreview();
+      return;
     }
-  }
 
-  const area = document.getElementById('mp-preview-area');
-  area.innerHTML = '';
-  const nameEl = document.createElement('div');
-  nameEl.className = 'mp-file-name';
-  nameEl.textContent = file.name;
+    const titleEl = overlay.querySelector('.mp-title');
+    if (titleEl) {
+      titleEl.textContent = _pendingMediaFiles.length === 1 ? 'Send media' : `Send ${_pendingMediaFiles.length} files`;
+    }
 
-  if (file.type.startsWith('image/')) {
-    const img = document.createElement('img');
-    img.className = 'mp-img-preview';
-    img.src = URL.createObjectURL(file);
-    img.onload = () => URL.revokeObjectURL(img.src);
-    area.appendChild(img);
-  } else if (file.type.startsWith('video/')) {
-    const vid = document.createElement('video');
-    vid.className = 'mp-vid-preview';
-    vid.src = URL.createObjectURL(file);
-    vid.controls = true;
-    vid.muted = true;
-    area.appendChild(vid);
-  } else if (file.type.startsWith('audio/')) {
-    area.innerHTML = `<div class="mp-icon-preview">🎵</div>`;
-  } else {
-    area.innerHTML = `<div class="mp-icon-preview">📎</div>`;
-  }
-  area.appendChild(nameEl);
+    const qualitySetting = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
+    const hasCompressible = _pendingMediaFiles.some(f => isCompressibleMedia(f));
+    const qualityWrap = document.getElementById('mp-quality-wrap');
+    const qualityToggle = document.getElementById('mp-quality-toggle');
 
-  const sizeEl = document.createElement('div');
-  sizeEl.className = 'mp-file-size';
-  sizeEl.textContent = formatBytes(file.size);
-  area.appendChild(sizeEl);
+    if (qualityWrap && qualityToggle) {
+      if (qualitySetting === 'ask' && hasCompressible) {
+        qualityWrap.classList.remove('hidden');
+      } else if (qualitySetting === 'original' && hasCompressible) {
+        qualityWrap.classList.add('hidden');
+        qualityToggle.checked = true;
+      } else {
+        qualityWrap.classList.add('hidden');
+        qualityToggle.checked = false;
+      }
+    }
+
+    const area = document.getElementById('mp-preview-area');
+    if (!area) return;
+    area.innerHTML = '';
+
+    if (_pendingMediaFiles.length === 1) {
+      const file = _pendingMediaFiles[0];
+      const nameEl = document.createElement('div');
+      nameEl.className = 'mp-file-name';
+      nameEl.textContent = file.name;
+
+      if (file.type.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.className = 'mp-img-preview';
+        img.src = URL.createObjectURL(file);
+        img.onload = () => URL.revokeObjectURL(img.src);
+        area.appendChild(img);
+      } else if (file.type.startsWith('video/')) {
+        const vid = document.createElement('video');
+        vid.className = 'mp-vid-preview';
+        vid.src = URL.createObjectURL(file);
+        vid.controls = true;
+        vid.muted = true;
+        area.appendChild(vid);
+      } else if (file.type.startsWith('audio/')) {
+        area.innerHTML = '<div class="mp-icon-preview">🎵</div>';
+      } else {
+        area.innerHTML = '<div class="mp-icon-preview">📎</div>';
+      }
+      area.appendChild(nameEl);
+
+      const sizeEl = document.createElement('div');
+      sizeEl.className = 'mp-file-size';
+      sizeEl.textContent = formatBytes(file.size);
+      area.appendChild(sizeEl);
+    } else {
+      // Multi-file gallery grid
+      const gallery = document.createElement('div');
+      gallery.className = 'mp-gallery';
+
+      let totalBytes = 0;
+      _pendingMediaFiles.forEach((file, index) => {
+        totalBytes += file.size;
+        const card = document.createElement('div');
+        card.className = 'mp-gallery-card';
+
+        const remBtn = document.createElement('button');
+        remBtn.className = 'mp-card-remove';
+        remBtn.innerHTML = '&times;';
+        remBtn.title = 'Remove';
+        remBtn.addEventListener('click', ev => {
+          ev.stopPropagation();
+          _pendingMediaFiles.splice(index, 1);
+          updateGalleryOrSingle();
+        });
+        card.appendChild(remBtn);
+
+        if (file.type.startsWith('image/')) {
+          const thumb = document.createElement('img');
+          thumb.className = 'mp-gallery-thumb';
+          thumb.src = URL.createObjectURL(file);
+          thumb.onload = () => URL.revokeObjectURL(thumb.src);
+          card.appendChild(thumb);
+        } else {
+          const icon = document.createElement('div');
+          icon.className = 'mp-gallery-icon';
+          icon.textContent = file.type.startsWith('video/') ? '🎬'
+                           : file.type.startsWith('audio/') ? '🎵'
+                           : '📎';
+          card.appendChild(icon);
+        }
+
+        const name = document.createElement('div');
+        name.className = 'mp-gallery-name';
+        name.textContent = file.name;
+        name.title = file.name;
+
+        const size = document.createElement('div');
+        size.className = 'mp-gallery-size';
+        size.textContent = formatBytes(file.size);
+
+        card.appendChild(name);
+        card.appendChild(size);
+        gallery.appendChild(card);
+      });
+
+      area.appendChild(gallery);
+
+      const totalEl = document.createElement('div');
+      totalEl.className = 'mp-total-summary';
+      totalEl.textContent = `${_pendingMediaFiles.length} files · Total ${formatBytes(totalBytes)}`;
+      area.appendChild(totalEl);
+    }
+  };
+
+  await updateGalleryOrSingle();
 
   const captionInput = document.getElementById('mp-caption');
   if (captionInput) captionInput.value = '';
@@ -642,8 +720,8 @@ export async function showMediaPreview(file, S, onConfirm) {
 }
 
 export function closeMediaPreview() {
-  _pendingMediaFile = null;
-  _pendingOnConfirm = null;
+  _pendingMediaFiles = [];
+  _pendingOnConfirm  = null;
   const overlay = document.getElementById('media-preview-overlay');
   if (overlay) {
     overlay.classList.add('hidden');

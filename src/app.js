@@ -1212,6 +1212,12 @@ function hideUploadProgress() {
   if (fill) fill.style.width = '0%';
 }
 
+let _batchCancelled = false;
+function cancelBatchUpload() {
+  _batchCancelled = true;
+  cancelCurrentUpload();
+}
+
 async function handleMediaSend(file, caption, { isOriginal = false } = {}) {
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
   if (!S.spineConfig?.accounts?.length) {
@@ -1311,6 +1317,129 @@ async function handleMediaSend(file, caption, { isOriginal = false } = {}) {
   } finally {
     hideUploadProgress();
     S.mediaUploading = false;
+    setSendBtnState(true);
+    if (attachBtn) attachBtn.disabled = false;
+  }
+}
+
+async function handleBatchMediaSend(filesOrFile, caption, { isOriginal = false } = {}) {
+  const files = Array.isArray(filesOrFile) ? filesOrFile.filter(Boolean) : [filesOrFile].filter(Boolean);
+  if (!files.length) return;
+  if (files.length === 1) {
+    return handleMediaSend(files[0], caption, { isOriginal });
+  }
+
+  if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
+  if (!S.spineConfig?.accounts?.length) {
+    toast('No Drive accounts linked. Add one in Settings → Storage.');
+    return;
+  }
+
+  S.mediaUploading = true;
+  _batchCancelled = false;
+  setSendBtnState(false);
+  const attachBtn = $('attach-btn');
+  if (attachBtn) attachBtn.disabled = true;
+
+  // Proactively ensure Drive access token is valid before starting upload
+  const activeAccount = S.spineConfig.accounts.find(a => hasDriveToken(a.driveUid)) || S.spineConfig.accounts[0];
+  if (activeAccount && !hasDriveToken(activeAccount.driveUid)) {
+    toast('Refreshing Google Drive session…');
+    const ok = await driveAutoReAuth(activeAccount.driveUid);
+    if (!ok) {
+      toast('Drive session expired — re-authenticate in Settings → Storage');
+      S.mediaUploading = false;
+      setSendBtnState(true);
+      if (attachBtn) attachBtn.disabled = false;
+      return;
+    }
+  }
+
+  showUploadProgress(0);
+
+  const qualityMode = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
+  const shouldCompress = qualityMode === 'original' ? false : (qualityMode === 'compressed' ? true : !isOriginal);
+
+  let sentCount = 0;
+  const totalFiles = files.length;
+
+  try {
+    for (let i = 0; i < totalFiles; i++) {
+      if (_batchCancelled) {
+        throw new Error('Upload cancelled');
+      }
+
+      const file = files[i];
+      // Attach user's caption only to the first file in the batch
+      const fileCaption = (i === 0 && caption) ? caption : null;
+
+      const progressCallback = (fraction) => {
+        const overallFrac = (i + Math.max(0, Math.min(1, fraction))) / totalFiles;
+        updateUploadProgress(overallFrac);
+      };
+
+      let mediaPayload;
+      try {
+        mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, progressCallback, fileCaption, shouldCompress);
+      } catch (err) {
+        if (_batchCancelled) throw new Error('Upload cancelled');
+        if (err.name === 'DriveAuthError' && err.driveUid) {
+          toast('Re-authenticating Drive…');
+          const ok = await driveAutoReAuth(err.driveUid);
+          if (ok && !_batchCancelled) {
+            mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, progressCallback, fileCaption, shouldCompress);
+          } else {
+            throw new Error('Drive session expired — re-authenticate in Settings → Storage');
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      const metaText = JSON.stringify({
+        uuid:      mediaPayload.uuid,
+        mediaType: mediaPayload.mediaType,
+        fileName:  mediaPayload.fileName,
+        fileSize:  mediaPayload.fileSize,
+        mimeType:  mediaPayload.mimeType,
+        caption:   fileCaption || null,
+      });
+      const { ciphertext, iv } = await encrypt(S.encKey, metaText);
+
+      const payload = {
+        ciphertext,
+        iv,
+        type:       mediaPayload.mediaType,
+        deviceId:   S.deviceId,
+        deviceName: S.deviceName,
+        uuid:       mediaPayload.uuid,
+        fileName:   mediaPayload.fileName,
+        fileSize:   mediaPayload.fileSize,
+        mimeType:   mediaPayload.mimeType,
+        caption:    fileCaption || null,
+        encThumb:   mediaPayload.encThumb,
+      };
+
+      if (S.isOnline) {
+        await fbSendMessage(S.uid, payload);
+      } else {
+        await queue.add(S.uid, payload);
+      }
+      sentCount++;
+    }
+
+    toast(`Sent ${sentCount} file${sentCount === 1 ? '' : 's'}`);
+  } catch (err) {
+    console.error('[batch media send]', err);
+    if (err.message === 'Upload cancelled' || _batchCancelled) {
+      toast(sentCount > 0 ? `Upload cancelled (${sentCount}/${totalFiles} sent)` : 'Upload cancelled');
+    } else {
+      toast(sentCount > 0 ? `Sent ${sentCount}/${totalFiles} files. Error: ${err.message}` : `Upload failed: ${err.message}`);
+    }
+  } finally {
+    hideUploadProgress();
+    S.mediaUploading = false;
+    _batchCancelled = false;
     setSendBtnState(true);
     if (attachBtn) attachBtn.disabled = false;
   }
@@ -2758,27 +2887,28 @@ function bindEvents() {
   const fileInp = $('file-input') || $('media-file-input');
   $('attach-btn')?.addEventListener('click', () => fileInp?.click());
   fileInp?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     e.target.value = '';
-    showMediaPreview(file, S, handleMediaSend);
+    showMediaPreview(files, S, handleBatchMediaSend);
   });
-  $('upload-cancel-btn')?.addEventListener('click', cancelCurrentUpload);
+  $('upload-cancel-btn')?.addEventListener('click', cancelBatchUpload);
 
   // Clipboard paste (images)
   document.addEventListener('paste', async e => {
     if (S.currentScreen !== 's-app') return;
     const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItem = items.find(item => item.type.startsWith('image/'));
-    if (!imageItem) return;
+    const imageFiles = items
+      .filter(item => item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+    if (!imageFiles.length) return;
     if (!S.spineConfig?.accounts?.length) {
       toast('No Drive accounts linked. Add one in Settings → Storage.');
       return;
     }
-    const file = imageItem.getAsFile();
-    if (!file) return;
     e.preventDefault();
-    showMediaPreview(file, S, handleMediaSend);
+    showMediaPreview(imageFiles, S, handleBatchMediaSend);
   });
 
   // Drag and drop files onto the chat area
@@ -2797,13 +2927,13 @@ function bindEvents() {
     e.preventDefault();
     dropTarget.classList.remove('drag-over');
     if (S.currentScreen !== 's-app') return;
-    const file = e.dataTransfer?.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (!files.length) return;
     if (!S.spineConfig?.accounts?.length) {
       toast('No Drive accounts linked. Add one in Settings → Storage.');
       return;
     }
-    showMediaPreview(file, S, handleMediaSend);
+    showMediaPreview(files, S, handleBatchMediaSend);
   });
 
   // Settings Panel events
