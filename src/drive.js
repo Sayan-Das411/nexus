@@ -26,7 +26,6 @@ export function getDriveToken(driveUid) {
     if (!raw) return null;
     const t = JSON.parse(raw);
     if (Date.now() > t.expiresAt) {
-      localStorage.removeItem(TOKEN_PREFIX + driveUid);
       return null;
     }
     return t.accessToken;

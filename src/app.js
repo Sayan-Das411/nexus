@@ -432,44 +432,56 @@ async function attemptBiometricUnlock() {
 // ============================================================
 // DRIVE AUTO RE-AUTHENTICATION
 // ============================================================
-let _driveReAuthAttempted = new Set();
+let _driveReAuthPromise = new Map(); // driveUid -> Promise<boolean>
 
 async function driveAutoReAuth(driveUid) {
-  if (_driveReAuthAttempted.has(driveUid)) return false;
-  _driveReAuthAttempted.add(driveUid);
-
-  const config = S.spineConfig ?? await getSpineConfig(S.uid);
-  const acc = config.accounts?.find(a => a.driveUid === driveUid);
-  if (!acc) return false;
-
-  try {
-    const { GoogleAuthProvider, signInWithPopup, getAuth } =
-      await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
-    const auth = getAuth();
-    const originalUser = auth.currentUser;
-
-    const provider = new GoogleAuthProvider();
-    provider.addScope('https://www.googleapis.com/auth/drive.file');
-    provider.setCustomParameters({
-      login_hint: acc.email,
-      prompt:     'none',
-    });
-
-    const result = await signInWithPopup(auth, provider);
-    const cred   = GoogleAuthProvider.credentialFromResult(result);
-    if (cred?.accessToken) {
-      storeDriveToken(driveUid, cred.accessToken, 3600);
-      console.log('[drive] Auto-refreshed token for', acc.email);
-    }
-
-    if (originalUser && result.user?.uid !== S.uid) {
-      try { await auth.updateCurrentUser(originalUser); } catch {}
-    }
-
-    return !!cred?.accessToken;
-  } catch {
-    return false;
+  if (_driveReAuthPromise.has(driveUid)) {
+    return _driveReAuthPromise.get(driveUid);
   }
+
+  const p = (async () => {
+    const config = S.spineConfig ?? await getSpineConfig(S.uid);
+    const acc = config.accounts?.find(a => a.driveUid === driveUid);
+    if (!acc) return false;
+
+    try {
+      const { GoogleAuthProvider, signInWithPopup, getAuth } =
+        await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
+      const auth = getAuth();
+      const originalUser = auth.currentUser;
+
+      const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive.appdata');
+      provider.addScope('https://www.googleapis.com/auth/drive.file');
+      provider.setCustomParameters({
+        login_hint: acc.email,
+      });
+
+      const result = await signInWithPopup(auth, provider);
+      const cred   = GoogleAuthProvider.credentialFromResult(result);
+      if (cred?.accessToken) {
+        storeDriveToken(driveUid, cred.accessToken, 3600);
+        console.log('[drive] Refreshed token for', acc.email);
+        S.spineConfig = await getSpineConfig(S.uid);
+      }
+
+      if (originalUser && result.user?.uid !== S.uid) {
+        try { await auth.updateCurrentUser(originalUser); } catch {}
+      }
+
+      return !!cred?.accessToken;
+    } catch (err) {
+      if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+        console.warn('[drive] Auto re-auth error:', err);
+      }
+      return false;
+    } finally {
+      _driveReAuthPromise.delete(driveUid);
+    }
+  })();
+
+  _driveReAuthPromise.set(driveUid, p);
+  return p;
 }
 
 // ============================================================
@@ -970,6 +982,12 @@ window.Nexus.openMedia = async function(uuid) {
   try {
     const entry = await getManifestEntry(S.uid, uuid);
     if (!entry) { toast('Media not found'); return; }
+
+    if (entry.driveUid && !hasDriveToken(entry.driveUid)) {
+      toast('Connecting to Google Drive…');
+      await driveAutoReAuth(entry.driveUid);
+    }
+
     let url;
     try {
       url = await fetchMedia(S.uid, S.encKey, uuid);
@@ -1011,6 +1029,12 @@ window.Nexus.loadAudio = async function(uuid, containerId) {
   try {
     container.querySelector('.audio-load-btn')?.setAttribute('disabled', '');
     const entry = await getManifestEntry(S.uid, uuid);
+
+    if (entry?.driveUid && !hasDriveToken(entry.driveUid)) {
+      toast('Connecting to Google Drive…');
+      await driveAutoReAuth(entry.driveUid);
+    }
+
     let url;
     try {
       url = await fetchMedia(S.uid, S.encKey, uuid);
@@ -1199,6 +1223,21 @@ async function handleMediaSend(file, caption) {
   setSendBtnState(false);
   const attachBtn = $('attach-btn');
   if (attachBtn) attachBtn.disabled = true;
+
+  // Proactively ensure Drive access token is valid before starting upload
+  const activeAccount = S.spineConfig.accounts.find(a => hasDriveToken(a.driveUid)) || S.spineConfig.accounts[0];
+  if (activeAccount && !hasDriveToken(activeAccount.driveUid)) {
+    toast('Refreshing Google Drive session…');
+    const ok = await driveAutoReAuth(activeAccount.driveUid);
+    if (!ok) {
+      toast('Drive session expired — re-authenticate in Settings → Storage');
+      S.mediaUploading = false;
+      setSendBtnState(true);
+      if (attachBtn) attachBtn.disabled = false;
+      return;
+    }
+  }
+
   showUploadProgress(0);
 
   try {
@@ -1589,34 +1628,14 @@ async function renderStorageSummary() {
 
 window.Nexus.reAuthDrive = async function(driveUid) {
   try {
-    const { GoogleAuthProvider, signInWithPopup, getAuth } =
-      await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
-    const config = await getSpineConfig(S.uid);
-    const acc = config.accounts.find(a => a.driveUid === driveUid);
-    if (!acc) { toast('Account not found in Spine'); return; }
-
-    const provider = new GoogleAuthProvider();
-    provider.addScope('https://www.googleapis.com/auth/drive.file');
-    provider.setCustomParameters({ login_hint: acc.email });
-
-    const auth = getAuth();
-    const originalUser = auth.currentUser;
-    const result = await signInWithPopup(auth, provider);
-    const cred   = GoogleAuthProvider.credentialFromResult(result);
-
-    if (result.user.uid !== S.uid && originalUser) {
-      try { await auth.updateCurrentUser(originalUser); } catch {}
-    }
-
-    if (cred?.accessToken) {
-      storeDriveToken(driveUid, cred.accessToken, 3600);
-      _driveReAuthAttempted.delete(driveUid);
-      S.spineConfig = await getSpineConfig(S.uid);
+    toast('Connecting to Google Drive…');
+    const ok = await driveAutoReAuth(driveUid);
+    if (ok) {
       toast('Drive account re-authenticated');
       renderStorageSummary();
       drainPendingDriveDeletes(S.uid).catch(() => {});
     } else {
-      toast('Could not get Drive access — try again');
+      toast('Could not re-authenticate Drive account');
     }
   } catch (err) {
     if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
@@ -3016,6 +3035,7 @@ function bindEvents() {
       const { GoogleAuthProvider, signInWithPopup, getAuth } =
         await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
       const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive.appdata');
       provider.addScope('https://www.googleapis.com/auth/drive.file');
       provider.setCustomParameters({ prompt: 'select_account' });
 

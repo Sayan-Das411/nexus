@@ -142,9 +142,8 @@ export async function routeUpload(uid, fileSizeBytes) {
   }
 
   if (needsAuth) {
-    throw new Error(
-      'Drive account needs re-authentication. Open Settings → Storage and tap Re-authenticate.'
-    );
+    const unauthed = sorted.find(a => !hasDriveToken(a.driveUid));
+    throw new DriveAuthError(unauthed?.driveUid);
   }
   throw new Error('No Spine account has enough space. Add a Drive account or increase a cap.');
 }
