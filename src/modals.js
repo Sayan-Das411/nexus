@@ -507,6 +507,15 @@ export function openVideoEditor(S, onRemoved) {
 let _pendingMediaFile = null;
 let _pendingOnConfirm = null;
 
+export function isCompressibleMedia(file) {
+  if (!file?.type) return false;
+  // Currently images (excluding animated gifs / svgs)
+  if (file.type.startsWith('image/')) {
+    return file.type !== 'image/gif' && file.type !== 'image/svg+xml';
+  }
+  return false;
+}
+
 export async function showMediaPreview(file, S, onConfirm) {
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
   if (!S.spineConfig?.accounts?.length && S.uid) {
@@ -577,8 +586,8 @@ export async function showMediaPreview(file, S, onConfirm) {
     });
   }
 
-  const qualitySetting = (await settings.get('image_quality')) ?? 'compressed';
-  const isCompressible = file.type.startsWith('image/') && file.type !== 'image/gif' && file.type !== 'image/svg+xml';
+  const qualitySetting = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
+  const isCompressible = isCompressibleMedia(file);
   const qualityWrap = document.getElementById('mp-quality-wrap');
   const qualityToggle = document.getElementById('mp-quality-toggle');
 

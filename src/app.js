@@ -1240,7 +1240,7 @@ async function handleMediaSend(file, caption, { isOriginal = false } = {}) {
 
   showUploadProgress(0);
 
-  const qualityMode = (await settings.get('image_quality')) ?? 'compressed';
+  const qualityMode = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
   const shouldCompress = qualityMode === 'original' ? false : (qualityMode === 'compressed' ? true : !isOriginal);
 
   try {
@@ -1753,9 +1753,9 @@ async function openSettings() {
   const lpToggle = $('settings-link-previews');
   if (lpToggle) lpToggle.checked = lpEnabled !== false;
 
-  const qualSel = $('settings-image-quality');
+  const qualSel = $('settings-media-quality') || $('settings-image-quality');
   if (qualSel) {
-    qualSel.value = (await settings.get('image_quality')) ?? 'compressed';
+    qualSel.value = (await settings.get('media_quality')) ?? (await settings.get('image_quality')) ?? 'compressed';
   }
 
   renderStorageSummary();
@@ -3033,12 +3033,13 @@ function bindEvents() {
     toast('Font size updated');
   });
 
-  $('settings-image-quality')?.addEventListener('change', async e => {
-    await settings.set('image_quality', e.target.value);
+  const mediaQualityInput = $('settings-media-quality') || $('settings-image-quality');
+  mediaQualityInput?.addEventListener('change', async e => {
+    await settings.set('media_quality', e.target.value);
     const labels = {
-      compressed: 'Images will be compressed',
-      original: 'Images will be sent in original quality',
-      ask: 'Will ask quality before sending images',
+      compressed: 'Media will be compressed',
+      original: 'Media will be sent in original quality',
+      ask: 'Will ask quality before sending media',
     };
     toast(labels[e.target.value] || 'Setting saved');
   });
