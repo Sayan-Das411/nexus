@@ -506,6 +506,7 @@ export function openVideoEditor(S, onRemoved) {
 // ============================================================
 let _pendingMediaFiles = [];
 let _pendingOnConfirm  = null;
+let _updateGalleryFn   = null;
 
 export function isCompressibleMedia(file) {
   if (!file?.type) return false;
@@ -516,7 +517,36 @@ export function isCompressibleMedia(file) {
   return false;
 }
 
+export function isMediaPreviewOpen() {
+  const overlay = document.getElementById('media-preview-overlay');
+  return !!(overlay && !overlay.classList.contains('hidden'));
+}
+
+export function addMediaPreviewFiles(filesOrFile) {
+  const rawList = Array.isArray(filesOrFile) ? filesOrFile : [filesOrFile];
+  const valid = rawList.filter(Boolean);
+  if (!valid.length) return;
+
+  const newFiles = valid.filter(nf =>
+    !_pendingMediaFiles.some(of => of.name === nf.name && of.size === nf.size && of.lastModified === nf.lastModified)
+  );
+  if (!newFiles.length) {
+    toast('File(s) already added');
+    return;
+  }
+
+  _pendingMediaFiles.push(...newFiles);
+  if (_updateGalleryFn) {
+    _updateGalleryFn();
+  }
+}
+
 export async function showMediaPreview(filesOrFile, S, onConfirm) {
+  if (isMediaPreviewOpen()) {
+    addMediaPreviewFiles(filesOrFile);
+    return;
+  }
+
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
   if (!S.spineConfig?.accounts?.length && S.uid) {
     try {
@@ -542,13 +572,25 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
       <div class="mp-backdrop"></div>
       <div class="mp-container">
         <div class="mp-header">
-          <button id="mp-cancel" class="mp-cancel-btn">&times;</button>
+          <button id="mp-cancel" class="mp-cancel-btn" title="Cancel">&times;</button>
           <span class="mp-title">Send media</span>
-          <label id="mp-quality-wrap" class="mp-quality-wrap hidden" title="Send original uncompressed photo">
-            <input type="checkbox" id="mp-quality-toggle">
-            <span class="mp-quality-pill">HD Original</span>
-          </label>
+          <div class="mp-header-actions">
+            <button id="mp-add-btn" class="mp-add-btn" type="button" title="Add more files">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              <span>Add</span>
+            </button>
+            <label id="mp-quality-wrap" class="mp-quality-wrap hidden" title="Send original uncompressed photo">
+              <input type="checkbox" id="mp-quality-toggle">
+              <span class="mp-quality-pill">HD Original</span>
+            </label>
+          </div>
         </div>
+        <input type="file" id="mp-file-input" multiple
+               accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+               style="display:none" aria-hidden="true">
         <div id="mp-preview-area" class="mp-preview-area"></div>
         <div class="mp-bottom">
           <input type="text" id="mp-caption" class="mp-caption" placeholder="Add a caption…" autocomplete="off">
@@ -563,6 +605,51 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
 
     overlay.querySelector('.mp-backdrop').addEventListener('click', closeMediaPreview);
     document.getElementById('mp-cancel').addEventListener('click', closeMediaPreview);
+
+    document.getElementById('mp-add-btn')?.addEventListener('click', () => {
+      document.getElementById('mp-file-input')?.click();
+    });
+    document.getElementById('mp-file-input')?.addEventListener('change', e => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      if (files.length) addMediaPreviewFiles(files);
+    });
+
+    ['dragenter', 'dragover'].forEach(name => {
+      overlay.addEventListener(name, e => {
+        e.preventDefault();
+        e.stopPropagation();
+        overlay.classList.add('mp-drag-active');
+      });
+    });
+    ['dragleave', 'drop'].forEach(name => {
+      overlay.addEventListener(name, e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.type === 'dragleave' && e.target !== overlay && e.target !== overlay.querySelector('.mp-backdrop')) return;
+        overlay.classList.remove('mp-drag-active');
+      });
+    });
+    overlay.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      overlay.classList.remove('mp-drag-active');
+      const dropped = Array.from(e.dataTransfer?.files || []).filter(Boolean);
+      if (dropped.length) {
+        addMediaPreviewFiles(dropped);
+      }
+    });
+
+    overlay.addEventListener('paste', e => {
+      const items = Array.from(e.clipboardData?.items || []);
+      const files = items.map(it => it.getAsFile()).filter(Boolean);
+      if (files.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        addMediaPreviewFiles(files);
+      }
+    });
+
     document.getElementById('mp-send').addEventListener('click', () => {
       const caption = document.getElementById('mp-caption')?.value?.trim() || null;
       const isOriginal = document.getElementById('mp-quality-toggle')?.checked || false;
@@ -623,34 +710,56 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
 
     if (_pendingMediaFiles.length === 1) {
       const file = _pendingMediaFiles[0];
-      const nameEl = document.createElement('div');
-      nameEl.className = 'mp-file-name';
-      nameEl.textContent = file.name;
+      const card = document.createElement('div');
+      card.className = 'mp-single-wrap';
+
+      const remBtn = document.createElement('button');
+      remBtn.className = 'mp-card-remove';
+      remBtn.innerHTML = '&times;';
+      remBtn.title = 'Remove';
+      remBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        _pendingMediaFiles = [];
+        closeMediaPreview();
+      });
+      card.appendChild(remBtn);
 
       if (file.type.startsWith('image/')) {
         const img = document.createElement('img');
         img.className = 'mp-img-preview';
         img.src = URL.createObjectURL(file);
         img.onload = () => URL.revokeObjectURL(img.src);
-        area.appendChild(img);
+        card.appendChild(img);
       } else if (file.type.startsWith('video/')) {
         const vid = document.createElement('video');
         vid.className = 'mp-vid-preview';
         vid.src = URL.createObjectURL(file);
         vid.controls = true;
         vid.muted = true;
-        area.appendChild(vid);
+        card.appendChild(vid);
       } else if (file.type.startsWith('audio/')) {
-        area.innerHTML = '<div class="mp-icon-preview">🎵</div>';
+        const icon = document.createElement('div');
+        icon.className = 'mp-icon-preview';
+        icon.textContent = '🎵';
+        card.appendChild(icon);
       } else {
-        area.innerHTML = '<div class="mp-icon-preview">📎</div>';
+        const icon = document.createElement('div');
+        icon.className = 'mp-icon-preview';
+        icon.textContent = '📎';
+        card.appendChild(icon);
       }
-      area.appendChild(nameEl);
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'mp-file-name';
+      nameEl.textContent = file.name;
+      card.appendChild(nameEl);
 
       const sizeEl = document.createElement('div');
       sizeEl.className = 'mp-file-size';
       sizeEl.textContent = formatBytes(file.size);
-      area.appendChild(sizeEl);
+      card.appendChild(sizeEl);
+
+      area.appendChild(card);
     } else {
       // Multi-file gallery grid
       const gallery = document.createElement('div');
@@ -702,6 +811,24 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
         gallery.appendChild(card);
       });
 
+      // Add file tile at the end of the gallery
+      const addCard = document.createElement('div');
+      addCard.className = 'mp-gallery-card mp-gallery-add-card';
+      addCard.title = 'Add more files';
+      addCard.innerHTML = `
+        <div class="mp-gallery-add-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </div>
+        <div class="mp-gallery-name">Add file</div>
+      `;
+      addCard.addEventListener('click', () => {
+        document.getElementById('mp-file-input')?.click();
+      });
+      gallery.appendChild(addCard);
+
       area.appendChild(gallery);
 
       const totalEl = document.createElement('div');
@@ -711,6 +838,7 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
     }
   };
 
+  _updateGalleryFn = updateGalleryOrSingle;
   await updateGalleryOrSingle();
 
   const captionInput = document.getElementById('mp-caption');
@@ -722,8 +850,10 @@ export async function showMediaPreview(filesOrFile, S, onConfirm) {
 export function closeMediaPreview() {
   _pendingMediaFiles = [];
   _pendingOnConfirm  = null;
+  _updateGalleryFn   = null;
   const overlay = document.getElementById('media-preview-overlay');
   if (overlay) {
+    overlay.classList.remove('mp-drag-active');
     overlay.classList.add('hidden');
     const area = overlay.querySelector('#mp-preview-area');
     if (area) {

@@ -52,7 +52,8 @@ import { prepareMediaMessage, fetchMedia, decryptThumbnail,
 import { toast, nexusConfirm, nexusPrompt, showLightbox }
   from './dialogs.js';
 import { openChangePassphrase, openSpineMigration, openSlideshowEditor,
-         openVideoEditor, showMediaPreview, closeMediaPreview }
+         openVideoEditor, showMediaPreview, closeMediaPreview,
+         isMediaPreviewOpen, addMediaPreviewFiles }
   from './modals.js';
 import { escHtml, escAttr, avatarLetter, formatText,
          buildMessageHTML, buildReactionsHTML,
@@ -2890,7 +2891,11 @@ function bindEvents() {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
     e.target.value = '';
-    showMediaPreview(files, S, handleBatchMediaSend);
+    if (isMediaPreviewOpen()) {
+      addMediaPreviewFiles(files);
+    } else {
+      showMediaPreview(files, S, handleBatchMediaSend);
+    }
   });
   $('upload-cancel-btn')?.addEventListener('click', cancelBatchUpload);
 
@@ -2903,6 +2908,11 @@ function bindEvents() {
       .map(item => item.getAsFile())
       .filter(Boolean);
     if (!imageFiles.length) return;
+    if (isMediaPreviewOpen()) {
+      e.preventDefault();
+      addMediaPreviewFiles(imageFiles);
+      return;
+    }
     if (!S.spineConfig?.accounts?.length) {
       toast('No Drive accounts linked. Add one in Settings → Storage.');
       return;
@@ -2929,6 +2939,10 @@ function bindEvents() {
     if (S.currentScreen !== 's-app') return;
     const files = Array.from(e.dataTransfer?.files || []);
     if (!files.length) return;
+    if (isMediaPreviewOpen()) {
+      addMediaPreviewFiles(files);
+      return;
+    }
     if (!S.spineConfig?.accounts?.length) {
       toast('No Drive accounts linked. Add one in Settings → Storage.');
       return;
