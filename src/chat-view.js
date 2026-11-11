@@ -649,7 +649,7 @@ export function openSearch(S, onNavigateToMsg) {
   searchInput.oninput = (e) => {
     clearTimeout(_searchDebounce);
     const q = e.target.value.trim();
-    if (!q) { renderSearchResults([], '', onNavigateToMsg); return; }
+    if (!q) { renderSearchResults([], '', onNavigateToMsg, S); return; }
     _searchDebounce = setTimeout(() => runSearch(q, S, onNavigateToMsg), 180);
   };
 

@@ -94,6 +94,17 @@ window._nexusDeviceId = null;
 // Per-device decrypted avatar cache: deviceId → dataUrl (or null).
 const _deviceAvatarCache = new Map();
 
+// Phase 4 Edit / Reply state (hoisted to avoid TDZ issues)
+const P4 = {
+  editingMsgId: null,
+  replyToMsg:   null,
+};
+let _suppressNextSelectClick = false;
+let _drainingQueue = false;
+let _unreadScrollCount = 0;
+let _typingTimeout = null;
+const _renderedMsgs = new Map(); // msgId → { readByOthers, edited, deleted }
+
 // ============================================================
 // DOM HELPERS
 // ============================================================
@@ -475,6 +486,16 @@ async function startChat() {
   S.browser    = account.browser  ?? detectBrowser();
   S.email      = account.email;
 
+  if (!S.encKey) {
+    const keyData = await keyStore.get(account.uid);
+    if (keyData?.key) {
+      S.encKey = keyData.key;
+    } else {
+      showScreen('s-passphrase-entry');
+      return;
+    }
+  }
+
   $('header-avatar').textContent = avatarLetter(account.deviceName ?? account.email);
   $('header-title').textContent  = S.deviceName ?? 'Nexus';
 
@@ -611,7 +632,6 @@ function clearUnsubscribers() {
 // ============================================================
 // SCROLL-TO-BOTTOM BUTTON & BADGE
 // ============================================================
-let _unreadScrollCount = 0;
 
 function setupScrollToBottom() {
   $('scroll-to-bottom')?.remove();
@@ -625,8 +645,8 @@ function setupScrollToBottom() {
     </svg>
     <span id="scroll-unread-badge" class="scroll-unread-badge"></span>`;
 
-  const chatArea = $('chat-area');
-  if (chatArea) chatArea.appendChild(btn);
+  const targetParent = $('s-app') || $('chat-area');
+  if (targetParent) targetParent.appendChild(btn);
 
   btn.addEventListener('click', () => {
     _unreadScrollCount = 0;
@@ -701,8 +721,6 @@ async function handleIncomingMessages(messages) {
 
   scrollToBottom(false);
 }
-
-const _renderedMsgs = new Map(); // msgId → { readByOthers, edited, deleted }
 
 async function renderMessages(messages) {
   const container = $('messages-list');
@@ -1048,6 +1066,17 @@ async function handleSend() {
 
   if (P4.editingMsgId) { await commitEdit(); return; }
 
+  if (!S.encKey) {
+    const keyData = await keyStore.get(S.uid);
+    if (keyData?.key) {
+      S.encKey = keyData.key;
+    } else {
+      toast('Passphrase required to encrypt messages');
+      showScreen('s-passphrase-entry');
+      return;
+    }
+  }
+
   S.sendInProgress = true;
   setSendBtnState(false);
 
@@ -1317,8 +1346,6 @@ function updateAvatarDisplay() {
 // ============================================================
 // OFFLINE QUEUE DRAIN (RE-ENTRANCY SAFE)
 // ============================================================
-let _drainingQueue = false;
-
 async function drainQueue() {
   if (_drainingQueue || !S.uid || !S.encKey || !S.isOnline) return;
   _drainingQueue = true;
@@ -1414,7 +1441,6 @@ function autoResizeInput() {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
-let _typingTimeout = null;
 function onInputChange() {
   autoResizeInput();
   const val = $('msg-input').value;
@@ -2006,13 +2032,6 @@ function updateStrengthMeter(val) {
 // ============================================================
 // PHASE 4: EDIT, REPLY, SELECTION, CONTEXT MENU
 // ============================================================
-const P4 = {
-  editingMsgId: null,
-  replyToMsg:   null,
-};
-
-let _suppressNextSelectClick = false;
-
 function onSelectRowClick(row) {
   if (_suppressNextSelectClick) return;
   const msgId = row.dataset.id;
@@ -2623,7 +2642,6 @@ function bindEvents() {
   $('setup-pin-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && _pinSetupBuffer.length === 6) advancePINSetup();
   });
-  initPINSetupScreen();
 
   $('bio-setup-btn')?.addEventListener('click', handleBiometricSetup);
   $('bio-skip-btn')?.addEventListener('click',  () => showScreen('s-device-name'));
@@ -2678,13 +2696,64 @@ function bindEvents() {
   });
 
   // Attachments
-  $('attach-btn')?.addEventListener('click', () => $('media-file-input')?.click());
-  $('media-file-input')?.addEventListener('change', e => {
+  const fileInp = $('file-input') || $('media-file-input');
+  $('attach-btn')?.addEventListener('click', () => fileInp?.click());
+  fileInp?.addEventListener('change', async e => {
     const file = e.target.files?.[0];
-    if (file) showMediaPreview(file, S, handleMediaSend);
+    if (!file) return;
     e.target.value = '';
+    const isPreviewable = file.type.startsWith('image/') ||
+                          file.type.startsWith('video/') ||
+                          file.type.startsWith('audio/');
+    if (isPreviewable) showMediaPreview(file, S, handleMediaSend);
+    else               await handleMediaSend(file);
   });
   $('upload-cancel-btn')?.addEventListener('click', cancelCurrentUpload);
+
+  // Clipboard paste (images)
+  document.addEventListener('paste', async e => {
+    if (S.currentScreen !== 's-app') return;
+    const items = Array.from(e.clipboardData?.items ?? []);
+    const imageItem = items.find(item => item.type.startsWith('image/'));
+    if (!imageItem) return;
+    if (!S.spineConfig?.accounts?.length) {
+      toast('No Drive accounts linked. Add one in Settings → Storage.');
+      return;
+    }
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    showMediaPreview(file, S, handleMediaSend);
+  });
+
+  // Drag and drop files onto the chat area
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evName => {
+    document.addEventListener(evName, e => e.preventDefault());
+  });
+  const dropTarget = $('s-app') || document.body;
+  dropTarget.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropTarget.classList.add('drag-over');
+  });
+  dropTarget.addEventListener('dragleave', e => {
+    if (e.target === dropTarget) dropTarget.classList.remove('drag-over');
+  });
+  dropTarget.addEventListener('drop', e => {
+    e.preventDefault();
+    dropTarget.classList.remove('drag-over');
+    if (S.currentScreen !== 's-app') return;
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    if (!S.spineConfig?.accounts?.length) {
+      toast('No Drive accounts linked. Add one in Settings → Storage.');
+      return;
+    }
+    const isPreviewable = file.type.startsWith('image/') ||
+                          file.type.startsWith('video/') ||
+                          file.type.startsWith('audio/');
+    if (isPreviewable) showMediaPreview(file, S, handleMediaSend);
+    else               handleMediaSend(file);
+  });
 
   // Settings Panel events
   $('settings-close-btn')?.addEventListener('click', () => hide('overlay-settings'));
@@ -2692,9 +2761,15 @@ function bindEvents() {
     if (e.target === $('overlay-settings')) hide('overlay-settings');
   });
 
+  // Account Switcher events
+  $('account-overlay-close')?.addEventListener('click', () => hide('overlay-accounts'));
   $('accounts-close-btn')?.addEventListener('click', () => hide('overlay-accounts'));
   $('overlay-accounts')?.addEventListener('click', e => {
     if (e.target === $('overlay-accounts')) hide('overlay-accounts');
+  });
+  $('add-account-btn')?.addEventListener('click', () => {
+    hide('overlay-accounts');
+    showScreen('s-signin');
   });
 
   $('settings-accent-color')?.addEventListener('input', e => applyAccentColor(e.target.value));
@@ -3036,7 +3111,12 @@ document.addEventListener('nexus:locked', () => {
 // ============================================================
 // BOOTSTRAP
 // ============================================================
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    bindEvents();
+    init().catch(err => console.error('[boot]', err));
+  });
+} else {
   bindEvents();
   init().catch(err => console.error('[boot]', err));
-});
+}

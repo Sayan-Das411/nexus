@@ -1554,9 +1554,16 @@
       transition: opacity 220ms ease, transform 220ms cubic-bezier(0.34,1.56,0.64,1);
     }
 
-    #toast.show {
+    #toast.show,
+    #toast.toast-visible {
       opacity: 1;
       transform: translateX(-50%) translateY(0);
+    }
+
+    #chat-area.drag-over,
+    #s-app.drag-over {
+      outline: 2px dashed var(--accent);
+      outline-offset: -4px;
     }
 
     /* Settings label text (used in Data section) */

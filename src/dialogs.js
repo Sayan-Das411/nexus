@@ -6,9 +6,9 @@ export function toast(msg, duration = 3000) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
-  el.classList.add('toast-visible');
+  el.classList.add('show', 'toast-visible');
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => el.classList.remove('toast-visible'), duration);
+  el._timer = setTimeout(() => el.classList.remove('show', 'toast-visible'), duration);
 }
 
 export function nexusConfirm(message, { confirmLabel = 'Confirm', danger = false } = {}) {
