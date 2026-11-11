@@ -204,19 +204,29 @@ export async function uploadMedia(uid, encKey, file, onProgress) {
   // Generate a UUID for this file
   const uuid = crypto.randomUUID();
 
-  // Read file as ArrayBuffer and encrypt
-  const arrayBuf  = await file.arrayBuffer();
-  const plainBlob = new Uint8Array(arrayBuf);
-
-  // Encrypt: convert to base64 string then encrypt.
-  // Use a chunked approach — the naive spread pattern crashes with stack
-  // overflow for any file larger than ~64 KB.
+  // Fast base64 encoding without huge memory duplication or call stack issues:
+  // Native FileReader uses browser C++ streaming encoder; fallback uses chunked buffer.
   let b64 = '';
-  const CHUNK = 8192;
-  for (let i = 0; i < plainBlob.length; i += CHUNK) {
-    b64 += String.fromCharCode(...plainBlob.subarray(i, i + CHUNK));
+  if (typeof FileReader !== 'undefined') {
+    b64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result;
+        resolve(res.substring(res.indexOf(',') + 1));
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  } else {
+    const arrayBuf  = await file.arrayBuffer();
+    const plainBlob = new Uint8Array(arrayBuf);
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < plainBlob.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, plainBlob.subarray(i, i + CHUNK));
+    }
+    b64 = btoa(binary);
   }
-  b64 = btoa(b64);
   const { ciphertext, iv } = await encrypt(encKey, b64);
   const encPayload = JSON.stringify({ ciphertext, iv });
   const encBlob    = new Blob([encPayload], { type: 'application/octet-stream' });

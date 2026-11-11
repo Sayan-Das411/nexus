@@ -43,13 +43,13 @@ export function hasDriveToken(driveUid) {
 
 // ---- Upload cancellation ----------------------------------------------------
 
-let _activeXhr = null;
+const _activeXhrs = new Set();
 
 export function cancelCurrentUpload() {
-  if (_activeXhr) {
-    _activeXhr.abort();
-    _activeXhr = null;
+  for (const xhr of _activeXhrs) {
+    try { xhr.abort(); } catch {}
   }
+  _activeXhrs.clear();
 }
 
 // ---- Authenticated fetch (GET/PATCH/DELETE) ---------------------------------
@@ -127,7 +127,7 @@ export async function uploadFile(driveUid, folderId, uuid, encryptedBlob, onProg
 function xhrUpload(method, url, headers, body, onProgress, driveUid) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    _activeXhr = xhr;
+    _activeXhrs.add(xhr);
 
     xhr.open(method, url);
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, String(v));
@@ -138,8 +138,10 @@ function xhrUpload(method, url, headers, body, onProgress, driveUid) {
       });
     }
 
+    const cleanup = () => { _activeXhrs.delete(xhr); };
+
     xhr.onload = () => {
-      _activeXhr = null;
+      cleanup();
       if (xhr.status === 401) { if (driveUid) clearDriveToken(driveUid); reject(new DriveAuthError(driveUid ?? 'unknown')); return; }
       if (xhr.status === 403) {
         let msg = '';
@@ -162,8 +164,8 @@ function xhrUpload(method, url, headers, body, onProgress, driveUid) {
       catch { reject(new Error('Invalid response from Drive API')); }
     };
 
-    xhr.onerror = () => { _activeXhr = null; reject(new Error('Network error during upload')); };
-    xhr.onabort = () => { _activeXhr = null; reject(new Error('Upload cancelled')); };
+    xhr.onerror = () => { cleanup(); reject(new Error('Network error during upload')); };
+    xhr.onabort = () => { cleanup(); reject(new Error('Upload cancelled')); };
 
     xhr.send(body);
   });

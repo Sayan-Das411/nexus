@@ -185,6 +185,7 @@ export async function sendMessage(uid, payload) {
   if (payload.fileSize != null) record.fileSize = payload.fileSize;
   if (payload.mimeType) record.mimeType = payload.mimeType;
   if (payload.encThumb) record.encThumb = payload.encThumb;
+  if (payload.caption)  record.caption  = payload.caption;
 
   await set(msgRef, record);
 

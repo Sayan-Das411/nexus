@@ -126,11 +126,13 @@ export async function authenticateBiometrics(uid) {
   if (!await biometricsAvailable()) return false;
 
   const stored = await biometricStore.get(uid);
-  if (!stored?.credentialId) return false;
+  const credentialId = stored?.credentialId ?? (typeof stored === 'string' ? stored : null);
+  if (!credentialId) return false;
 
   const challenge   = crypto.getRandomValues(new Uint8Array(32));
-  const credIdBytes = stored.credentialId.match(/.{2}/g)
-    .map(h => parseInt(h, 16));
+  const credIdBytes = credentialId.match(/.{2}/g)
+    ?.map(h => parseInt(h, 16));
+  if (!credIdBytes) return false;
 
   try {
     const assertion = await navigator.credentials.get({

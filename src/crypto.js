@@ -24,9 +24,9 @@ const IV_BYTES          = 12; // 96-bit IV for AES-GCM (NIST recommended)
 function buf2b64(buf) {
   const bytes = new Uint8Array(buf);
   let binary  = '';
-  const CHUNK = 8192;
+  const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
   }
   return btoa(binary);
 }

@@ -1,5 +1,5 @@
 // src/app.js
-// Nexus — main application logic.
+// Nexus — main application logic and coordinator.
 
 import { initDB, settings, keyStore, queue, drafts, lockStore }
   from './db.js';
@@ -22,49 +22,64 @@ import { setupPIN, verifyPIN, isLockSetUp, setupBiometrics,
          lock, unlock, loadAutoLockSetting, setupVisibilityLock,
          setAutoLockMinutes, startAutoLockTimer }
   from './lock.js';
-import { THEMES, applyTheme, loadTheme, saveTheme } from './themes.js';
+import { THEMES, applyTheme, loadTheme, saveTheme }
+  from './themes.js';
 import { saveAccentColor, clearAccentColor, saveOwnBubbleColor, clearOwnBubbleColor,
          saveOtherBubbleColor, clearOtherBubbleColor,
          saveWallpaper, clearWallpaper, applyAccentColor, applyOwnBubbleColor,
          applyOtherBubbleColor, applyWallpaper, compressWallpaper, compressAvatar,
-         applyStoredAppearance, loadAppearance,
-         cropImage,
+         applyStoredAppearance, loadAppearance, cropImage,
          applyVideoWallpaper, removeVideoWallpaper, saveVideoWallpaper,
          loadVideoWallpaper, clearVideoWallpaper,
          pauseVideoWallpaper, resumeVideoWallpaper,
          startSlideshowWallpaper, stopSlideshowWallpaper,
          pauseSlideshowWallpaper, resumeSlideshowWallpaper,
          saveSlideshowWallpaper, loadSlideshowWallpaper, clearSlideshowWallpaper,
-         saveSlideshowOpts, loadSlideshowOpts, clearSlideshowOpts } from './appearance.js';
+         saveSlideshowOpts, loadSlideshowOpts, clearSlideshowOpts }
+  from './appearance.js';
 import { cancelCurrentUpload, storeDriveToken,
          uploadFile as driveUploadFile, downloadFile as driveDownloadFile,
          deleteFile as driveDeleteFile, ensureFolder as driveEnsureFolder,
-         hasDriveToken, DriveAuthError } from './drive.js';
+         hasDriveToken, DriveAuthError }
+  from './drive.js';
 import { getSpineConfig, saveSpineConfig, addSpineAccount, removeSpineAccount,
          getStorageSummary, getManifestEntry,
-         checkAndRestoreFolders, deleteMedia, drainPendingDriveDeletes } from './spine.js';
+         checkAndRestoreFolders, deleteMedia, drainPendingDriveDeletes }
+  from './spine.js';
 import { prepareMediaMessage, fetchMedia, decryptThumbnail,
-         buildFileBubbleHTML, formatBytes } from './media.js';
+         buildFileBubbleHTML, formatBytes }
+  from './media.js';
+import { toast, nexusConfirm, nexusPrompt, showLightbox }
+  from './dialogs.js';
+import { openChangePassphrase, openSpineMigration, openSlideshowEditor,
+         openVideoEditor, showMediaPreview, closeMediaPreview }
+  from './modals.js';
+import { escHtml, escAttr, avatarLetter, formatText,
+         buildMessageHTML, buildReactionsHTML,
+         SEL, enterSelectMode, exitSelectMode, updateSelectToolbar, showSelectToolbar, legacyCopy,
+         openContextMenu, closeContextMenu,
+         openSearch, closeSearch, injectLinkPreview, extractFirstUrl }
+  from './chat-view.js';
 
 // ============================================================
 // STATE
 // ============================================================
 const S = {
-  uid:           null,
-  deviceId:      null,
-  deviceKey:     null,   // composite key: uid + ':' + deviceId — used for ALL per-device settings
-  deviceName:    null,
-  platform:      null,
-  browser:       null,
-  encKey:        null,
-  messages:      [],
-  devices:       {},
-  typingDevices: [],
-  presenceMap:   {},
-  unsubscribers: [],
-  isOnline:      navigator.onLine,
-  currentScreen: 's-loading',
-  config:        null,
+  uid:             null,
+  deviceId:        null,
+  deviceKey:       null,   // composite key: uid + ':' + deviceId
+  deviceName:      null,
+  platform:        null,
+  browser:         null,
+  encKey:          null,
+  messages:        [],
+  devices:         {},
+  typingDevices:   [],
+  presenceMap:     {},
+  unsubscribers:   [],
+  isOnline:        navigator.onLine,
+  currentScreen:   's-loading',
+  config:          null,
   sendInProgress:  false,
   spineConfig:     null,
   mediaUploading:  false,
@@ -73,8 +88,10 @@ const S = {
   email:           null,
 };
 
+// Expose deviceId globally for reactions checking in chat-view
+window._nexusDeviceId = null;
+
 // Per-device decrypted avatar cache: deviceId → dataUrl (or null).
-// Populated lazily as devices are seen; cleared on account switch.
 const _deviceAvatarCache = new Map();
 
 // ============================================================
@@ -88,12 +105,9 @@ function isMobileDevice() {
 const $  = id  => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
-function show(id)      { $(id)?.classList.remove('hidden'); }
+function show(id) { $(id)?.classList.remove('hidden'); }
 function hide(id) {
   $(id)?.classList.add('hidden');
-  // Resume animated wallpapers when an overlay closes — they were paused on
-  // open to avoid costly backdrop-filter recomposition (see openSettings,
-  // openAccountSwitcher). Only resume when ALL overlays are hidden.
   if ((id === 'overlay-settings' || id === 'overlay-accounts') &&
       $('overlay-settings')?.classList.contains('hidden') &&
       $('overlay-accounts')?.classList.contains('hidden')) {
@@ -135,146 +149,10 @@ function showScreen(id) {
 }
 
 // ============================================================
-// ============================================================
-// CUSTOM CONFIRM DIALOG
-// Replaces window.confirm() which is silently blocked in iOS PWA
-// standalone mode. Returns a Promise<boolean>.
-// ============================================================
-function nexusConfirm(message, { confirmLabel = 'Confirm', danger = false } = {}) {
-  return new Promise(resolve => {
-    // Remove any existing confirm dialog
-    document.getElementById('nexus-confirm-overlay')?.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = 'nexus-confirm-overlay';
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:99999',
-      'background:rgba(0,0,0,0.55)', 'backdrop-filter:blur(4px)',
-      'display:flex', 'align-items:center', 'justify-content:center',
-      'padding:24px', 'animation:fade-in 160ms ease forwards',
-    ].join(';');
-
-    const panel = document.createElement('div');
-    panel.style.cssText = [
-      'background:var(--surface2)', 'border:1px solid var(--border2)',
-      'border-radius:var(--radius-lg)', 'padding:24px 20px 20px',
-      'max-width:320px', 'width:100%',
-      'box-shadow:var(--shadow)', 'display:flex', 'flex-direction:column', 'gap:16px',
-    ].join(';');
-
-    const txt = document.createElement('p');
-    txt.textContent = message;
-    txt.style.cssText = 'margin:0;font-size:15px;line-height:1.5;color:var(--text);text-align:center';
-
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:10px;justify-content:center';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.style.cssText = 'flex:1;max-width:140px';
-
-    const okBtn = document.createElement('button');
-    okBtn.textContent = confirmLabel;
-    okBtn.className = 'btn';
-    okBtn.style.cssText = `flex:1;max-width:140px;background:${danger ? 'var(--danger)' : 'var(--accent)'};color:#fff`;
-
-    const done = (result) => { overlay.remove(); resolve(result); };
-    cancelBtn.addEventListener('click', () => done(false));
-    okBtn.addEventListener('click',     () => done(true));
-    overlay.addEventListener('click', e => { if (e.target === overlay) done(false); });
-
-    btnRow.append(cancelBtn, okBtn);
-    panel.append(txt, btnRow);
-    overlay.append(panel);
-    document.body.append(overlay);
-    okBtn.focus();
-  });
-}
-
-// ============================================================
-// CUSTOM PROMPT DIALOG
-// Replaces window.prompt() which is silently blocked in iOS PWA
-// standalone mode. Returns a Promise<string|null>.
-// ============================================================
-function nexusPrompt(message, defaultValue = '') {
-  return new Promise(resolve => {
-    document.getElementById('nexus-prompt-overlay')?.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = 'nexus-prompt-overlay';
-    overlay.style.cssText = [
-      'position:fixed', 'inset:0', 'z-index:99999',
-      'background:rgba(0,0,0,0.55)', 'backdrop-filter:blur(4px)',
-      'display:flex', 'align-items:center', 'justify-content:center',
-      'padding:24px', 'animation:fade-in 160ms ease forwards',
-    ].join(';');
-
-    const panel = document.createElement('div');
-    panel.style.cssText = [
-      'background:var(--surface2)', 'border:1px solid var(--border2)',
-      'border-radius:var(--radius-lg)', 'padding:24px 20px 20px',
-      'max-width:320px', 'width:100%',
-      'box-shadow:var(--shadow)', 'display:flex', 'flex-direction:column', 'gap:14px',
-    ].join(';');
-
-    const txt = document.createElement('p');
-    txt.textContent = message;
-    txt.style.cssText = 'margin:0;font-size:15px;line-height:1.5;color:var(--text)';
-
-    const inp = document.createElement('input');
-    inp.type = 'text';
-    inp.value = defaultValue;
-    inp.className = 'text-input';
-    inp.style.marginBottom = '0';
-
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:10px;justify-content:center';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.style.cssText = 'flex:1;max-width:140px';
-
-    const okBtn = document.createElement('button');
-    okBtn.textContent = 'OK';
-    okBtn.className = 'btn';
-    okBtn.style.cssText = 'flex:1;max-width:140px;background:var(--accent);color:#fff';
-
-    const done = result => { overlay.remove(); resolve(result); };
-    cancelBtn.addEventListener('click', () => done(null));
-    okBtn.addEventListener('click', () => done(inp.value));
-    inp.addEventListener('keydown', e => {
-      if (e.key === 'Enter') done(inp.value);
-      if (e.key === 'Escape') done(null);
-    });
-    overlay.addEventListener('click', e => { if (e.target === overlay) done(null); });
-
-    btnRow.append(cancelBtn, okBtn);
-    panel.append(txt, inp, btnRow);
-    overlay.append(panel);
-    document.body.append(overlay);
-    setTimeout(() => { inp.focus(); inp.select(); }, 50);
-  });
-}
-
-// TOAST
-// ============================================================
-let _toastTimer = null;
-function toast(msg, duration = 3000) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => el.classList.remove('show'), duration);
-}
-
-// ============================================================
-// FONT SIZE
+// FONT SIZE SCALING
 // ============================================================
 function applyFontSize(px) {
   document.documentElement.style.setProperty('--msg-font-size', px + 'px');
-  // Avatar scales proportionally: base is 30px at 14px font.
   const avatarPx = Math.round(px * (30 / 14));
   document.documentElement.style.setProperty('--msg-avatar-size', avatarPx + 'px');
 }
@@ -287,51 +165,45 @@ async function loadAndApplyFontSize(uid) {
   if (inp) inp.value = String(px);
 }
 
-// ============================================================
-// LOADING MESSAGE
-// ============================================================
 function setLoading(msg) {
   const el = $('loading-msg');
   if (el) el.textContent = msg;
 }
 
 // ============================================================
-// INITIALIZATION SEQUENCE
+// INITIALIZATION
 // ============================================================
 async function init() {
   try {
-    setLoading('Opening local storage…');
+    setLoading('Opening storage…');
     await initDB();
 
-    setLoading('Loading theme…');
-    const themeId = await loadTheme(null);
-    applyTheme(themeId);
+    const rawConfig = await settings.get('firebase_config');
+    if (!rawConfig) {
+      showScreen('s-welcome');
+      return;
+    }
+    S.config = rawConfig;
 
-    setLoading('Checking setup…');
-    const config = await settings.get('firebase_config');
-    if (!config) { showScreen('s-welcome'); return; }
-
-    S.config = config;
     setLoading('Connecting to Firebase…');
-    await initFirebase(config);
+    await initFirebase(rawConfig);
 
-    setLoading('Checking account…');
     const account = await getCurrentAccount();
-    if (!account) { showScreen('s-signin'); return; }
-
-    const _earlyDeviceKey = `${account.uid}:${account.deviceId}`;
-    const accountTheme = await loadTheme(_earlyDeviceKey);
-    applyTheme(accountTheme);
+    if (!account) {
+      showScreen('s-signin');
+      return;
+    }
 
     S.uid        = account.uid;
     S.deviceId   = account.deviceId;
+    window._nexusDeviceId = account.deviceId;
+    S.deviceKey  = `${account.uid}:${account.deviceId}`;
     S.deviceName = account.deviceName;
     S.platform   = account.platform ?? detectPlatform();
+    S.browser    = account.browser  ?? detectBrowser();
+    S.email      = account.email;
 
     setLoading('Checking lock…');
-    // Pre-load the encryption key from IndexedDB so the profile picture can be
-    // decrypted and shown on the lock screen. The lock screen is UI-only
-    // protection; the derived key already lives in IDB regardless.
     const earlyKeyData = await keyStore.get(account.uid);
     if (earlyKeyData?.key) S.encKey = earlyKeyData.key;
 
@@ -339,22 +211,16 @@ async function init() {
     if (lockSetUp) {
       await loadAutoLockSetting(account.uid);
       setupVisibilityLock();
-      if (S.encKey) await loadAndApplyAvatar();   // decrypt avatar before lock screen shows
+      if (S.encKey) await loadAndApplyAvatar();
       showLockScreen();
     } else {
       await tryAutoInit();
     }
 
-    // Install prompt removed — the browser's own "Add to Home Screen" flow
-
-    // iOS Safari ignores interactive-widget=resizes-content.
-    // Use visualViewport to track the keyboard height and push the
-    // fixed input area up manually via a CSS custom property.
     if (window.visualViewport) {
       const vpHandler = () => {
         const kbH = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
         document.body.style.setProperty('--keyboard-h', kbH + 'px');
-        // Also nudge the s-app screen height so messages-list gets the right flex space
         const sApp = $('s-app');
         if (sApp) sApp.style.height = window.visualViewport.height + 'px';
       };
@@ -378,8 +244,8 @@ async function init() {
     const loadingEl = $('s-loading');
     if (loadingEl && !loadingEl.querySelector('.retry-btn')) {
       const btn = document.createElement('button');
-      btn.className = 'btn btn-ghost retry-btn';
-      btn.style.cssText = 'margin-top:28px;max-width:200px;';
+      btn.className = 'btn btn-primary retry-btn';
+      btn.style.cssText = 'margin-top:16px;max-width:160px';
       btn.textContent = 'Try Again';
       btn.addEventListener('click', () => location.reload());
       loadingEl.appendChild(btn);
@@ -395,7 +261,7 @@ async function tryAutoInit() {
     if (lockSetUp) {
       await loadAutoLockSetting(S.uid);
       setupVisibilityLock();
-      await loadAndApplyAvatar();   // decrypt avatar before lock screen shows
+      await loadAndApplyAvatar();
       showLockScreen();
     } else {
       showScreen('s-pin-setup');
@@ -406,265 +272,154 @@ async function tryAutoInit() {
 }
 
 // ============================================================
-// LOCK SCREEN
+// LOCK SCREEN & PIN
 // ============================================================
 async function showLockScreen() {
   const account = await getCurrentAccount();
   if (account) {
-    const lockAv = $('lock-avatar');
-    if (lockAv) {
-      // Use the per-device custom avatar if set; otherwise show the username initial.
-      // Never use the Google account photo — the user controls the avatar here.
-      if (S.avatarDataUrl) {
-        lockAv.innerHTML = `<img src="${escAttr(S.avatarDataUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
-      } else {
-        lockAv.textContent = avatarLetter(account.deviceName ?? account.email);
-      }
-    }
-
-    // Show device name (profile name) above the email
-    const lockName = $('lock-name');
-    if (lockName) lockName.textContent = account.deviceName ?? '';
-    $('lock-email').textContent = account.email;
+    const nameEl = $('lock-name');
+    if (nameEl) nameEl.textContent = account.deviceName ?? account.displayName ?? 'My Device';
   }
-
-  // Restore persisted lockout state so a page reload can't bypass the attempt limit.
-  const uid = S.uid ?? account?.uid;
-  if (uid) {
-    try {
-      const ld = await lockStore.get(uid);
-      if (ld?.failedAttempts) {
-        _pinAttempts = ld.failedAttempts;
-        if (ld.lockedUntil && ld.lockedUntil > Date.now()) {
-          _pinLockedUntil = ld.lockedUntil;
-          // Restart the countdown display
-          const promptEl = document.querySelector('.lock-prompt');
-          if (promptEl) {
-            const origText = 'Enter PIN to unlock';
-            if (_lockCountdownInterval) clearInterval(_lockCountdownInterval);
-            _lockCountdownInterval = setInterval(() => {
-              const left = Math.ceil((_pinLockedUntil - Date.now()) / 1000);
-              if (left <= 0) { clearInterval(_lockCountdownInterval); _lockCountdownInterval = null; if (promptEl) promptEl.textContent = origText; }
-              else           { if (promptEl) promptEl.textContent = `Locked — wait ${left}s`; }
-            }, 500);
-          }
-        }
-        // Show passphrase fallback if already in lockout territory
-        if (_pinAttempts >= 5) {
-          $('lock-use-passphrase-btn')?.classList.remove('hidden');
-        }
-      } else {
-        // Fresh show — reset in-memory counters and hide the fallback button
-        _pinAttempts    = 0;
-        _pinLockedUntil = 0;
-        $('lock-use-passphrase-btn')?.classList.add('hidden');
-      }
-    } catch {
-      _pinAttempts    = 0;
-      _pinLockedUntil = 0;
-      $('lock-use-passphrase-btn')?.classList.add('hidden');
-    }
-  }
-
-  const bioAvail   = await biometricsAvailable();
-  const bioEnabled = await isBiometricsEnabled(S.uid ?? account?.uid);
-  toggle('lock-bio-btn',  bioAvail && bioEnabled);
-  toggle('lock-bio-hint', bioAvail && bioEnabled);
 
   clearPINDisplay();
   showScreen('s-lock');
 
-  // Hide the on-screen numpad — native keyboard is used on all platforms.
-  $('lock-numpad')?.classList.add('hidden');
-  // Always hide the static hint text; the button is more discoverable on all platforms.
-  $('lock-keyboard-hint')?.classList.add('hidden');
-  const kbBtn = $('lock-keyboard-btn');
-  if (kbBtn) {
-    kbBtn.classList.remove('hidden');
-    // Relabel for pointer-based devices
-    if (!isMobileDevice()) {
-      kbBtn.childNodes[kbBtn.childNodes.length - 1].textContent = ' Click to type PIN';
+  const bioAvail = await biometricsAvailable();
+  const bioEnabled = await isBiometricsEnabled(S.uid);
+  toggle('lock-bio-btn', bioAvail && bioEnabled);
+
+  const lockData = await lockStore.get(S.uid);
+  const now = Date.now();
+  if (lockData?.lockedUntil && lockData.lockedUntil > now) {
+    applyLockout(lockData.lockedUntil);
+  } else {
+    if (lockData?.lockedUntil) {
+      await lockStore.set(S.uid, { ...lockData, failedAttempts: 0, lockedUntil: 0 });
+    }
+    if (bioAvail && bioEnabled) {
+      setTimeout(() => attemptBiometricUnlock(), 300);
     }
   }
 
+  requestAnimationFrame(() => {
+    $('lock-pin-input')?.focus();
+  });
+}
+
+let _lockoutTimer = null;
+function applyLockout(until) {
+  clearTimeout(_lockoutTimer);
+  const update = () => {
+    const rem = Math.ceil((until - Date.now()) / 1000);
+    if (rem <= 0) {
+      $('lock-error').textContent = '';
+      enablePINInputs(true);
+      return;
+    }
+    $('lock-error').textContent = `Too many attempts. Try again in ${rem}s.`;
+    enablePINInputs(false);
+    _lockoutTimer = setTimeout(update, 1000);
+  };
+  update();
+  $('lock-use-passphrase-btn')?.classList.remove('hidden');
+}
+
+function enablePINInputs(enabled) {
+  $$('.pin-lock-key').forEach(k => { k.disabled = !enabled; });
   const inp = $('lock-pin-input');
-  if (inp) inp.value = '';
-
-  const dotsRow    = $('pin-dots-row');
-  const newDotsRow = dotsRow?.cloneNode(true);
-  const newKbBtn   = kbBtn?.cloneNode(true);
-  if (dotsRow && newDotsRow) dotsRow.parentNode.replaceChild(newDotsRow, dotsRow);
-  if (kbBtn   && newKbBtn)   kbBtn.parentNode.replaceChild(newKbBtn,   kbBtn);
-
-  function focusLockInput() {
-    const i = $('lock-pin-input');
-    if (i) i.focus();
-  }
-
-  $('pin-dots-row')?.addEventListener('click', focusLockInput);
-  $('lock-keyboard-btn')?.addEventListener('click', focusLockInput);
-
-  if (!isMobileDevice()) setTimeout(focusLockInput, 350);
-
-  if (bioAvail && bioEnabled) setTimeout(() => attemptBiometricUnlock(), 400);
+  if (inp) inp.disabled = !enabled;
 }
 
-async function attemptBiometricUnlock() {
-  const uid = S.uid ?? (await getCurrentAccount())?.uid;
-  if (!uid) return;
-  try {
-    const ok = await authenticateBiometrics(uid);
-    if (ok) await afterUnlock(uid);
-    else toast('Biometric authentication failed — enter PIN');
-  } catch {
-    toast('Biometrics unavailable');
-  }
-}
-
-async function afterUnlock(uid) {
-  const keyData = await keyStore.get(uid);
-  if (!keyData?.key) {
-    S.uid = uid;
-    showScreen('s-passphrase-entry');
-    return;
-  }
-  S.encKey = keyData.key;
-  unlock();
-  await startChat();
-}
-
-let _pinBuffer     = '';
-let _pinAttempts   = 0;
-let _pinLockedUntil = 0;
-let _lockCountdownInterval = null;
+let _pinBuffer = '';
 
 function clearPINDisplay() {
   _pinBuffer = '';
-  updatePINDots();
   const inp = $('lock-pin-input');
   if (inp) inp.value = '';
+  updatePINDots('idle');
+  const errEl = $('lock-error');
+  if (errEl) errEl.textContent = '';
 }
 
 function updatePINDots(state) {
   const dots = $$('.pin-dot');
-  dots.forEach((d, i) => {
-    d.classList.toggle('filled', i < _pinBuffer.length);
-    d.classList.remove('pin-dot-error', 'pin-dot-success');
-    if (state === 'error')   d.classList.add('pin-dot-error');
-    if (state === 'success') d.classList.add('pin-dot-success');
+  dots.forEach((dot, i) => {
+    dot.classList.toggle('filled', i < _pinBuffer.length);
+    dot.classList.toggle('error',  state === 'error');
   });
 }
 
 function onPINDigit(d) {
   if (_pinBuffer.length >= 6) return;
-  if (Date.now() < _pinLockedUntil) return;
   _pinBuffer += d;
-  updatePINDots();
-  if (_pinBuffer.length === 6) setTimeout(submitPIN, 150);
+  const inp = $('lock-pin-input');
+  if (inp) inp.value = _pinBuffer;
+  updatePINDots('idle');
+  if (_pinBuffer.length === 6) submitPIN();
 }
 
 function onPINBackspace() {
   _pinBuffer = _pinBuffer.slice(0, -1);
-  updatePINDots();
+  const inp = $('lock-pin-input');
+  if (inp) inp.value = _pinBuffer;
+  updatePINDots('idle');
 }
 
 function onLockPINInput(e) {
-  if (Date.now() < _pinLockedUntil) { e.target.value = ''; return; }
-  const raw = (e.target.value || '').replace(/\D/g, '').slice(0, 6);
-  e.target.value = raw;
-  _pinBuffer = raw;
-  updatePINDots();
-  if (_pinBuffer.length === 6) setTimeout(submitPIN, 150);
+  const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+  _pinBuffer = val;
+  e.target.value = val;
+  updatePINDots('idle');
+  if (_pinBuffer.length === 6) submitPIN();
 }
 
 async function submitPIN() {
-  const remaining = _pinLockedUntil - Date.now();
-  if (remaining > 0) {
-    toast(`Too many attempts — try again in ${Math.ceil(remaining / 1000)}s`);
-    clearPINDisplay();
-    return;
-  }
-
-  const uid = S.uid ?? (await getCurrentAccount())?.uid;
-  if (!uid) return;
-  const ok = await verifyPIN(uid, _pinBuffer);
+  const pin = _pinBuffer;
+  const ok = await verifyPIN(S.uid, pin);
   if (ok) {
-    _pinAttempts = 0;
-    // Clear persisted attempt counter on success
-    try {
-      const ld = await lockStore.get(uid);
-      if (ld) await lockStore.set(uid, { ...ld, failedAttempts: 0, lockedUntil: 0 });
-    } catch {}
-    updatePINDots('success');
-    setTimeout(() => afterUnlock(uid), 180);
+    unlock();
+    clearPINDisplay();
+    const ld = await lockStore.get(S.uid);
+    if (ld) await lockStore.set(S.uid, { ...ld, failedAttempts: 0, lockedUntil: 0 });
+    await startChat();
   } else {
-    _pinAttempts++;
-
-    // Persist the attempt count so page-reload can't reset the lockout.
-    try {
-      const ld = await lockStore.get(uid);
-      if (ld) {
-        await lockStore.set(uid, {
-          ...ld,
-          failedAttempts: _pinAttempts,
-          lockedUntil: _pinAttempts >= 5
-            ? Date.now() + Math.min(30000 * Math.pow(2, _pinAttempts - 5), 300000)
-            : 0,
-        });
-      }
-    } catch {}
-
     updatePINDots('error');
+    if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
 
-    $('pin-dots-row')?.classList.add('shake');
-    setTimeout(() => {
-      $('pin-dots-row')?.classList.remove('shake');
-      clearPINDisplay();
-      updatePINDots();
-    }, 500);
-
-    if (_pinAttempts >= 5) {
-      const lockMs = Math.min(30000 * Math.pow(2, _pinAttempts - 5), 300000);
-      _pinLockedUntil = Date.now() + lockMs;
-      const secs = Math.ceil(lockMs / 1000);
-      toast(`Too many incorrect attempts — locked for ${secs}s`);
-      const promptEl = document.querySelector('.lock-prompt');
-      if (promptEl) {
-        const origText = promptEl.textContent;
-        if (_lockCountdownInterval) clearInterval(_lockCountdownInterval);
-        _lockCountdownInterval = setInterval(() => {
-          const left = Math.ceil((_pinLockedUntil - Date.now()) / 1000);
-          if (left <= 0) { clearInterval(_lockCountdownInterval); _lockCountdownInterval = null; if (promptEl) promptEl.textContent = origText; }
-          else           { if (promptEl) promptEl.textContent = `Locked — wait ${left}s`; }
-        }, 500);
-      }
-      // Reveal the passphrase fallback button after the first lockout
-      $('lock-use-passphrase-btn')?.classList.remove('hidden');
+    const ld = (await lockStore.get(S.uid)) ?? {};
+    const attempts = (ld.failedAttempts ?? 0) + 1;
+    let lockedUntil = 0;
+    if (attempts >= 5) {
+      lockedUntil = Date.now() + 30 * 1000;
+      applyLockout(lockedUntil);
     } else {
-      const left = 5 - _pinAttempts;
-      toast(`Incorrect PIN — ${left} attempt${left !== 1 ? 's' : ''} left`);
+      const remaining = 5 - attempts;
+      $('lock-error').textContent = `Incorrect PIN. ${remaining} attempt${remaining > 1 ? 's' : ''} left.`;
     }
+    await lockStore.set(S.uid, { ...ld, failedAttempts: attempts, lockedUntil });
+
+    setTimeout(() => {
+      _pinBuffer = '';
+      const inp = $('lock-pin-input');
+      if (inp) inp.value = '';
+      updatePINDots('idle');
+    }, 700);
+  }
+}
+
+async function attemptBiometricUnlock() {
+  const ok = await authenticateBiometrics(S.uid);
+  if (ok) {
+    unlock();
+    clearPINDisplay();
+    await startChat();
   }
 }
 
 // ============================================================
-// LAZY DRIVE RE-AUTHENTICATION
-// Google OAuth access tokens expire after ~1 hour. Firebase restores
-// its own session automatically, but Drive tokens must be re-fetched
-// explicitly.
-//
-// Previous approach: call signInWithPopup(prompt:'none') on every
-// startup. Problem: signInWithPopup() always physically opens a
-// browser popup via window.open() — even with prompt:'none' the
-// popup flashes visibly for 200-500ms on most platforms, disrupting
-// the user on every page load.
-//
-// Current approach: LAZY re-auth. When a Drive operation actually
-// fails with DriveAuthError we attempt ONE popup re-auth at that
-// point (contextual — user just tried to use Drive). If it
-// succeeds the original operation is retried automatically.
+// DRIVE AUTO RE-AUTHENTICATION
 // ============================================================
-let _driveReAuthAttempted = new Set(); // driveUids attempted this session
+let _driveReAuthAttempted = new Set();
 
 async function driveAutoReAuth(driveUid) {
   if (_driveReAuthAttempted.has(driveUid)) return false;
@@ -684,7 +439,7 @@ async function driveAutoReAuth(driveUid) {
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     provider.setCustomParameters({
       login_hint: acc.email,
-      prompt:     'none',   // silent — fails instead of showing consent
+      prompt:     'none',
     });
 
     const result = await signInWithPopup(auth, provider);
@@ -694,15 +449,12 @@ async function driveAutoReAuth(driveUid) {
       console.log('[drive] Auto-refreshed token for', acc.email);
     }
 
-    // Restore original Firebase user if the Drive account is different
     if (originalUser && result.user?.uid !== S.uid) {
       try { await auth.updateCurrentUser(originalUser); } catch {}
     }
 
     return !!cred?.accessToken;
   } catch {
-    // prompt:'none' throws when silent auth isn't possible — expected.
-    // User can manually re-auth from Settings → Storage.
     return false;
   }
 }
@@ -716,6 +468,7 @@ async function startChat() {
 
   S.uid        = account.uid;
   S.deviceId   = account.deviceId;
+  window._nexusDeviceId = account.deviceId;
   S.deviceKey  = `${account.uid}:${account.deviceId}`;
   S.deviceName = account.deviceName;
   S.platform   = account.platform ?? detectPlatform();
@@ -730,8 +483,6 @@ async function startChat() {
   autoResizeInput();
 
   try {
-    // Touch lastSeen and also write the current browser so stale Firebase
-    // device records (registered before the browser field was added) get fixed.
     await touchDevice(S.uid, S.deviceId, { browser: S.browser ?? detectBrowser() });
     await setupPresence(S.uid, S.deviceId, S.deviceName);
   } catch (e) { console.warn('[presence]', e); }
@@ -750,29 +501,21 @@ async function startChat() {
   S.unsubscribers.push(subscribeDevices(S.uid, async devMap => {
     const prevDevices = S.devices;
     S.devices = devMap;
-    if (S.deviceId && S.uid && !(S.deviceId in devMap)) {
+
+    if (S.deviceId && S.uid && Object.keys(devMap).length > 0 && !(S.deviceId in devMap)) {
       toast('This device was removed by another device. Signing out…');
       setTimeout(async () => {
         clearUnsubscribers();
         await signOut();
         showScreen('s-signin');
       }, 2000);
+      return;
     }
+
     if (!$('overlay-settings')?.classList.contains('hidden')) renderDevicesList();
 
-    // ---- Patch rendered message rows when a device's name changes ----------
-    // buildMessageHTML now prefers S.devices[did].name at render time, so new
-    // full-rebuilds pick up the new name automatically.  For rows that are
-    // already in the DOM we do a targeted patch so the user sees the update
-    // immediately without waiting for the next full rebuild.
     const container = $('messages-list');
     if (container) {
-      // If this is the first devices snapshot (page just loaded), S.messages has
-      // likely already been rendered with an empty S.devices — force a full rebuild
-      // now that real names are available. This fixes the post-refresh stale-name bug.
-      // We must clear _renderedMsgs to force renderMessages() into its full-rebuild
-      // path, otherwise it takes the incremental path (same IDs, no rebuild) which
-      // does NOT patch device name badges or avatar letters.
       const wasEmpty = Object.keys(prevDevices).length === 0;
       if (wasEmpty && S.messages.length > 0) {
         _renderedMsgs.clear();
@@ -780,17 +523,12 @@ async function startChat() {
       } else {
         for (const [did, dev] of Object.entries(devMap)) {
           const prev = prevDevices[did];
-          if (!prev || dev.name === prev.name) continue; // name unchanged
-          container.querySelectorAll('.msg-row').forEach(row => {
-            const msgId = row.dataset.id;
-            const msg   = S.messages.find(m => m.id === msgId);
-            if (!msg || msg.deviceId !== did) return;
-            // Patch the device-name badge
+          if (!prev || dev.name === prev.name) continue;
+          container.querySelectorAll(`.msg-row[data-device-id="${CSS.escape(did)}"]`).forEach(row => {
             const badge = row.querySelector('.msg-device');
             if (badge) {
               badge.innerHTML = `${platformIcon(dev.platform ?? 'unknown')} ${escHtml(dev.name ?? 'Unknown device')}`;
             }
-            // Patch the avatar letter (only when no custom photo is cached)
             const avatarEl = row.querySelector('.msg-avatar-img');
             if (avatarEl && !_deviceAvatarCache.get(did)) {
               avatarEl.textContent = avatarLetter(dev.name ?? '?');
@@ -800,7 +538,6 @@ async function startChat() {
       }
     }
 
-    // Decrypt avatars for devices that have a new or changed avatar field.
     if (S.encKey) {
       let anyChanged = false;
       for (const [did, dev] of Object.entries(devMap)) {
@@ -835,12 +572,7 @@ async function startChat() {
   showScreen('s-app');
   setupLongPress();
   setupScrollToBottom();
-  setupReplyQuoteClick();
-
-  // Per-device settings (theme, appearance, font, animation, wallpaper) are now
-  // keyed by S.deviceKey and stored only in local IndexedDB. They are NOT synced
-  // from Firebase prefs, which are a per-account shared hint only. This ensures
-  // full isolation: PC Chrome and Phone Chrome have completely independent settings.
+  setupMessagesListInteractions();
 
   const themeId = await loadTheme(S.deviceKey);
   applyTheme(themeId);
@@ -859,10 +591,6 @@ async function startChat() {
     S.spineConfig = { accounts: [] };
   }
 
-  // Drive token refresh is now lazy — see driveAutoReAuth().
-  // Tokens are refreshed on-demand when a Drive operation actually fails,
-  // avoiding the disruptive popup flash on every startup.
-
   if (S.isOnline) drainQueue();
 }
 
@@ -878,42 +606,14 @@ function clearUnsubscribers() {
   P4.editingMsgId = null;
   P4.replyToMsg   = null;
   hideReplyEditBanner();
-  if (SEL.active) exitSelectMode();
 }
 
 // ============================================================
-// SCROLL-TO-BOTTOM BUTTON
+// SCROLL-TO-BOTTOM BUTTON & BADGE
 // ============================================================
 let _unreadScrollCount = 0;
 
-// Delegated click handler for reply-quote divs. Using a delegated listener on
-// the container (rather than inline onclick) is more reliable on Android Chrome
-// where inline onclick inside a touch-scrollable div can be swallowed.
-function setupReplyQuoteClick() {
-  const list = $('messages-list');
-  if (!list || list.dataset.rqWired) return;
-  list.dataset.rqWired = '1';
-
-  // Prevent mousedown from starting a text-selection drag on the reply quote.
-  // Without this, on desktop the browser treats the mousedown as the beginning
-  // of a selection gesture (because .msg-bubble has user-select:text), which
-  // consumes the event and the click never fires.
-  // preventDefault() on mousedown blocks selection without blocking click.
-  list.addEventListener('mousedown', e => {
-    if (e.target.closest('[data-reply-id]')) e.preventDefault();
-  });
-
-  list.addEventListener('click', e => {
-    if (SEL.active) return;
-    const rq = e.target.closest('[data-reply-id]');
-    if (!rq) return;
-    e.stopPropagation();
-    window.Nexus.scrollToMsg(rq.dataset.replyId);
-  });
-}
-
 function setupScrollToBottom() {
-  // Remove any existing button (account switch)
   $('scroll-to-bottom')?.remove();
 
   const btn = document.createElement('button');
@@ -925,8 +625,6 @@ function setupScrollToBottom() {
     </svg>
     <span id="scroll-unread-badge" class="scroll-unread-badge"></span>`;
 
-  // Append into #chat-area so the button stays inside the message area
-  // and its bottom CSS offset correctly tracks the input bar gap.
   const chatArea = $('chat-area');
   if (chatArea) chatArea.appendChild(btn);
 
@@ -962,7 +660,7 @@ function updateScrollBadge() {
 }
 
 // ============================================================
-// MESSAGES
+// MESSAGES INCOMING & RENDERING (OPTIMIZED)
 // ============================================================
 async function handleIncomingMessages(messages) {
   if (S.pendingMessages.size > 0) {
@@ -973,7 +671,6 @@ async function handleIncomingMessages(messages) {
     }
   }
 
-  // Count new incoming messages from other devices for the scroll badge
   const prevVisibleIds = new Set(S.messages.filter(m => !m.deleted).map(m => m.id));
   const newOtherMsgs = messages.filter(m =>
     !m.deleted &&
@@ -984,7 +681,6 @@ async function handleIncomingMessages(messages) {
   S.messages = messages;
   await renderMessages(messages);
 
-  // If new messages arrived while user is scrolled up, increment badge
   const list = $('messages-list');
   if (list && newOtherMsgs.length > 0) {
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 120;
@@ -1006,15 +702,12 @@ async function handleIncomingMessages(messages) {
   scrollToBottom(false);
 }
 
-// Track rendered message IDs to avoid re-rendering
 const _renderedMsgs = new Map(); // msgId → { readByOthers, edited, deleted }
 
 async function renderMessages(messages) {
   const container = $('messages-list');
+  if (!container) return;
 
-  // ----------------------------------------------------------------
-  // DELETED MESSAGES VANISH COMPLETELY — filter before any rendering
-  // ----------------------------------------------------------------
   const visible = messages.filter(m => !m.deleted);
 
   if (!visible.length) {
@@ -1028,24 +721,17 @@ async function renderMessages(messages) {
     return;
   }
 
-  const empty = container.querySelector('.empty-state');
-  if (empty) empty.remove();
+  container.querySelector('.empty-state')?.remove();
 
   const incomingIds = visible.map(m => m.id);
+  const existingRows = Array.from(container.querySelectorAll('.msg-row[data-id]'));
+  const existingIds  = existingRows.map(el => el.dataset.id);
 
-  const existingIds = Array.from(container.querySelectorAll('.msg-row'))
-    .map(el => el.dataset.id);
-
-  // Full rebuild needed when:
-  // - first render
-  // - a message was deleted (visible count shrank — catches all deletions)
-  // - order changed
   const needsFullRebuild = existingIds.length === 0 ||
     existingIds.length > incomingIds.length ||
     incomingIds.slice(0, existingIds.length).some((id, i) => id !== existingIds[i]);
 
   if (needsFullRebuild) {
-    // Capture select state before destroying DOM — rows are about to be wiped.
     const _wasSelectActive = SEL.active;
     const _prevSelected    = _wasSelectActive ? new Set(SEL.selected) : null;
     if (_wasSelectActive) exitSelectMode();
@@ -1053,10 +739,7 @@ async function renderMessages(messages) {
     _renderedMsgs.clear();
     container.classList.add('anim-none');
 
-    // Preserve scroll position when the user is scrolled up (e.g. a message was
-    // deleted or edited while they were reading history). Only force-jump to the
-    // bottom on the very first render or when already near the bottom.
-    const isFirstRender  = existingIds.length === 0;
+    const isFirstRender = existingIds.length === 0;
     const atBottom = isFirstRender ||
       (container.scrollHeight - container.scrollTop - container.clientHeight < 160);
     const prevScrollTop    = container.scrollTop;
@@ -1071,18 +754,16 @@ async function renderMessages(messages) {
       container.scrollTop = prevScrollTop - (prevScrollHeight - container.scrollHeight);
     }
 
-    // Restore select mode if it was active before the rebuild.
     if (_wasSelectActive && _prevSelected) {
-      enterSelectMode(null);
+      enterSelectMode(null, S);
       const newVisibleIds = new Set(visible.map(m => m.id));
       for (const id of _prevSelected) {
         if (!newVisibleIds.has(id)) continue;
         SEL.selected.add(id);
-        const row = Array.from(container.querySelectorAll('.msg-row[data-id]'))
-                         .find(r => r.dataset.id === id);
+        const row = container.querySelector(`.msg-row[data-id="${CSS.escape(id)}"]`);
         if (row) row.classList.add('msg-selected');
       }
-      updateSelectToolbar();
+      updateSelectToolbar(S);
     }
 
     requestAnimationFrame(() => container.classList.remove('anim-none'));
@@ -1090,15 +771,16 @@ async function renderMessages(messages) {
       if (msg.type === 'image' && msg.encThumb && S.encKey) loadThumbnailAsync(msg);
       if ((!msg.type || msg.type === 'text') && msg.id) {
         const url = extractFirstUrl(msg._decryptedText ?? msg.text ?? '');
-        if (url) injectLinkPreview(msg.id, url).catch(() => {});
+        if (url) injectLinkPreview(msg.id, url, S.deviceKey).catch(() => {});
       }
     }
     return;
   }
 
-  // ----------------------------------------------------------------
-  // Incremental update — patch existing rows (ticks, reactions, edits)
-  // ----------------------------------------------------------------
+  // Fast O(1) indexed incremental updates
+  const rowMap = new Map();
+  existingRows.forEach(r => rowMap.set(r.dataset.id, r));
+
   const newMsgs = visible.slice(existingIds.length);
 
   for (const msg of visible.slice(0, existingIds.length)) {
@@ -1106,8 +788,7 @@ async function renderMessages(messages) {
     const prev = _renderedMsgs.get(msg.id);
     if (!prev) continue;
 
-    const row = Array.from(container.querySelectorAll('.msg-row[data-id]'))
-                     .find(r => r.dataset.id === msg.id);
+    const row = rowMap.get(msg.id);
     if (!row) continue;
 
     // Patch read tick
@@ -1132,7 +813,7 @@ async function renderMessages(messages) {
       }
     }
 
-    // Patch edit — rebuild this row when first edited
+    // Patch edit
     if (!!msg.edited && !prev.edited) {
       prev.edited = true;
       const hadDeviceBadge = !!row.querySelector('.msg-device');
@@ -1140,7 +821,7 @@ async function renderMessages(messages) {
       const isOwn = msg.deviceId === S.deviceId;
       const ts    = msg.timestamp ? new Date(msg.timestamp) : new Date();
       const time  = ts.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit', hour12: true });
-      const newRowHTML = buildMessageHTML(decrypted[0], isOwn, hadDeviceBadge, time, readByOthers);
+      const newRowHTML = buildMessageHTML(decrypted[0], isOwn, hadDeviceBadge, time, readByOthers, S, _deviceAvatarCache);
       const tmp = document.createElement('div');
       tmp.innerHTML = newRowHTML;
       row.replaceWith(tmp.firstElementChild);
@@ -1149,8 +830,6 @@ async function renderMessages(messages) {
 
   if (!newMsgs.length) return;
 
-  // Register existing messages in _renderedMsgs so future patches work.
-  // (Full rebuild already registers them; incremental appends did not — BUG FIX)
   for (const msg of visible.slice(0, existingIds.length)) {
     if (!_renderedMsgs.has(msg.id)) {
       const readByOthers = Object.keys(msg.readBy ?? {}).some(did => did !== S.deviceId);
@@ -1158,9 +837,6 @@ async function renderMessages(messages) {
     }
   }
 
-  // ----------------------------------------------------------------
-  // Append new messages to the bottom
-  // ----------------------------------------------------------------
   const decryptedNew = await decryptBatch(newMsgs);
 
   const lastExistingMsg = visible[existingIds.length - 1];
@@ -1187,23 +863,21 @@ async function renderMessages(messages) {
     const showDeviceName = !isOwn && msg.deviceId !== lastDevice;
     lastDevice = msg.deviceId;
     const readByOthers = Object.keys(msg.readBy ?? {}).some(did => did !== S.deviceId);
-    html += buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers);
+    html += buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers, S, _deviceAvatarCache);
   }
 
   container.insertAdjacentHTML('beforeend', html);
 
-  // Register newly appended messages in _renderedMsgs (BUG FIX — was missing before)
   for (const msg of decryptedNew) {
     const readByOthers = Object.keys(msg.readBy ?? {}).some(did => did !== S.deviceId);
     _renderedMsgs.set(msg.id, { readByOthers, edited: !!msg.edited, deleted: false });
   }
 
-  // Async thumbnail loads and link previews
   for (const msg of decryptedNew) {
     if (msg.type === 'image' && msg.encThumb && S.encKey) loadThumbnailAsync(msg);
     if ((!msg.type || msg.type === 'text') && msg.id) {
       const url = extractFirstUrl(msg._decryptedText ?? msg.text ?? '');
-      if (url) injectLinkPreview(msg.id, url).catch(() => {});
+      if (url) injectLinkPreview(msg.id, url, S.deviceKey).catch(() => {});
     }
   }
 }
@@ -1244,7 +918,7 @@ function buildFullHTML(decrypted) {
     lastDevice = msg.deviceId;
     const readByOthers = Object.keys(msg.readBy ?? {}).some(did => did !== S.deviceId);
     _renderedMsgs.set(msg.id, { readByOthers, edited: !!msg.edited, deleted: false });
-    html += buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers);
+    html += buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers, S, _deviceAvatarCache);
   }
   return html;
 }
@@ -1254,175 +928,15 @@ function loadThumbnailAsync(msg) {
     if (!thumb) return;
     const el = document.getElementById(`thumb-${msg.id}`);
     if (!el) return;
+    const captionHtml = msg.caption ? `<div class="media-caption">${escHtml(msg.caption)}</div>` : '';
     el.innerHTML = `<img class="msg-thumb" src="${escAttr(thumb)}" alt="${escHtml(msg.fileName ?? 'Image')}"
-      loading="lazy" onclick="Nexus.openMedia('${escAttr(msg.uuid)}')">
-      <div class="media-caption">${escHtml(msg.fileName ?? '')}</div>`;
+      loading="lazy" data-open-media="${escAttr(msg.uuid)}" style="cursor:pointer">
+      ${captionHtml}`;
   }).catch(() => {});
 }
 
-function buildMessageHTML(msg, isOwn, showDeviceName, time, readByOthers) {
-  const side        = isOwn ? 'own' : 'other';
-  const devPlatform = S.devices[msg.deviceId]?.platform ?? 'unknown';
-  // Always prefer the live device-record name so that username renames are
-  // reflected retroactively in already-rendered message rows on the next
-  // full rebuild, and in all new incremental appends.
-  const liveName    = S.devices[msg.deviceId]?.name ?? msg.deviceName ?? 'Unknown device';
-
-  let replyQuote = '';
-  if (msg.replyTo) {
-    const quoted = S.messages.find(m => m.id === msg.replyTo);
-    const qName  = S.devices[quoted?.deviceId]?.name ?? quoted?.deviceName ?? 'Unknown';
-
-    let qText;
-    if (!quoted || quoted.deleted) {
-      qText = quoted?.deleted ? 'Message deleted' : '…';
-    } else {
-      const type = quoted.type;
-      // Media messages encrypt a JSON descriptor as ciphertext — _decryptedText
-      // will be that raw JSON string, not human-readable. Detect it and use a
-      // friendly label instead.
-      const rawDecrypted = quoted._decryptedText ?? '';
-      const isMediaJson  = (type === 'image' || type === 'file') &&
-                           rawDecrypted.startsWith('{');
-      if (isMediaJson || !rawDecrypted) {
-        qText = type === 'image' ? '📷 Photo'
-              : type === 'file'  ? `📎 ${escHtml(quoted.fileName ?? 'File')}`
-              : '…';
-      } else {
-        qText = escHtml(rawDecrypted.slice(0, 80));
-      }
-    }
-
-    replyQuote = `<div class="reply-quote" data-reply-id="${escHtml(msg.replyTo)}" style="cursor:pointer">
-      <div class="rq-name">${escHtml(qName)}</div>
-      <div class="rq-text">${qText}</div>
-    </div>`;
-  }
-
-  let content = '';
-  if (msg.decryptError) {
-    content = `<span class="decrypt-error">${escHtml(msg.text)}</span>`;
-  } else if (msg.type === 'image' && msg.uuid) {
-    const thumbId = `thumb-${escHtml(msg.id)}`;
-    content = `<div id="${thumbId}" class="media-bubble media-image" data-uuid="${escHtml(msg.uuid)}">
-      <div class="media-placeholder" onclick="Nexus.openMedia('${escAttr(msg.uuid)}')">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="3" y="3" width="18" height="18" rx="2"/>
-          <circle cx="8.5" cy="8.5" r="1.5"/>
-          <path d="M21 15l-5-5L5 21"/>
-        </svg>
-        <span>${escHtml(msg.fileName ?? 'Image')}</span>
-      </div>
-    </div>`;
-  } else if (msg.type === 'file' && msg.uuid && msg.mimeType?.startsWith('audio/')) {
-    // Inline audio player with download button
-    const audioId = `audio-${escHtml(msg.id)}`;
-    content = `<div class="media-bubble media-audio" id="${audioId}" data-uuid="${escHtml(msg.uuid)}">
-      <div class="audio-placeholder">
-        <div class="audio-icon">🎵</div>
-        <div class="audio-info">
-          <div class="file-name">${escHtml(msg.fileName ?? 'Audio')}</div>
-          <div class="file-size">${formatBytes(msg.fileSize ?? 0)}</div>
-        </div>
-        <button class="audio-load-btn" onclick="Nexus.loadAudio('${escAttr(msg.uuid)}', '${audioId}')">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8">
-            <polygon points="6,3 15,9 6,15" fill="currentColor" stroke="none"/>
-          </svg>
-        </button>
-      </div>
-    </div>`;
-  } else if (msg.type === 'file' && msg.uuid) {
-    content = buildFileBubbleHTML(msg);
-  } else {
-    // Detect media metadata accidentally rendered as text — this happens when a
-    // message was stored without a proper type/uuid field, leaving the decrypted
-    // JSON payload as the visible text.
-    const rawText = msg.text ?? '';
-    let mediaFallback = false;
-    if (rawText.startsWith('{') && rawText.includes('"uuid"')) {
-      try {
-        const meta = JSON.parse(rawText);
-        if (meta.uuid && meta.mediaType) {
-          // Reconstruct as media message
-          msg.uuid     = meta.uuid;
-          msg.fileName = meta.fileName;
-          msg.fileSize = meta.fileSize;
-          msg.mimeType = meta.mimeType;
-          msg.type     = meta.mediaType;
-          if (meta.mediaType === 'image') {
-            const thumbId = `thumb-${escHtml(msg.id)}`;
-            content = `<div id="${thumbId}" class="media-bubble media-image" data-uuid="${escHtml(meta.uuid)}">
-              <div class="media-placeholder" onclick="Nexus.openMedia('${escAttr(meta.uuid)}')">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <rect x="3" y="3" width="18" height="18" rx="2"/>
-                  <circle cx="8.5" cy="8.5" r="1.5"/>
-                  <path d="M21 15l-5-5L5 21"/>
-                </svg>
-                <span>${escHtml(meta.fileName ?? 'Image')}</span>
-              </div>
-            </div>`;
-          } else {
-            content = buildFileBubbleHTML(msg);
-          }
-          mediaFallback = true;
-        }
-      } catch { /* not valid JSON, render as text */ }
-    }
-    if (!mediaFallback) {
-      content = formatText(escHtml(rawText));
-    }
-  }
-
-  const editedLabel   = msg.edited ? `<span class="msg-edited">edited</span>` : '';
-  const reactionsHTML = buildReactionsHTML(msg.reactions, msg.id);
-
-  const deviceBadge = showDeviceName
-    ? `<div class="msg-device">${platformIcon(devPlatform)} ${escHtml(liveName)}</div>`
-    : '';
-
-  const readTick = isOwn
-    ? `<span class="read-tick ${readByOthers ? 'read' : ''}" title="${readByOthers ? 'Read' : 'Sent'}">
-        ${readByOthers ? '&#10003;&#10003;' : '&#10003;'}
-       </span>`
-    : '';
-
-  const avatarHtml = !isOwn ? (() => {
-    if (showDeviceName) {
-      const devAvatar = _deviceAvatarCache.get(msg.deviceId);
-      const imgInner  = devAvatar
-        ? `<img src="${escAttr(devAvatar)}" alt="" style="width:100%;height:100%;object-fit:cover;">`
-        : avatarLetter(S.devices[msg.deviceId]?.name ?? msg.deviceName ?? '?');
-      const initialAttr = devAvatar ? '' : ' data-initial="1"';
-      return `<div class="msg-avatar-col"><div class="msg-avatar-img"${initialAttr}>${imgInner}</div></div>`;
-    }
-    return `<div class="msg-avatar-spacer"></div>`;
-  })() : '';
-
-  const bubbleHtml = `
-    <div class="msg-bubble">
-      ${replyQuote}
-      ${content}
-      ${reactionsHTML}
-      <div class="msg-meta">
-        ${editedLabel}
-        <span class="msg-time">${time}</span>
-        ${readTick}
-      </div>
-    </div>`;
-
-  const innerHtml = !isOwn
-    ? `<div class="msg-with-avatar">${avatarHtml}${bubbleHtml}</div>`
-    : bubbleHtml;
-
-  return `
-    <div class="msg-row ${side}" data-id="${escHtml(msg.id)}">
-      ${deviceBadge}
-      ${innerHtml}
-    </div>`;
-}
-
 // ============================================================
-// MEDIA OPEN
+// MEDIA ACTIONS & LIGHTBOX
 // ============================================================
 window.Nexus = window.Nexus ?? {};
 
@@ -1435,7 +949,6 @@ window.Nexus.openMedia = async function(uuid) {
     try {
       url = await fetchMedia(S.uid, S.encKey, uuid);
     } catch (err) {
-      // If Drive token expired, attempt one silent re-auth and retry
       if (err.name === 'DriveAuthError' && err.driveUid) {
         toast('Re-authenticating Drive…');
         const ok = await driveAutoReAuth(err.driveUid);
@@ -1449,11 +962,16 @@ window.Nexus.openMedia = async function(uuid) {
         throw err;
       }
     }
-    if (entry.mimeType?.startsWith('image/')) {
-      showLightbox(url, entry.fileName);
+
+    if (entry.mimeType?.startsWith('video/')) {
+      showLightbox(url, entry.fileName, true);
+    } else if (entry.mimeType?.startsWith('image/')) {
+      showLightbox(url, entry.fileName, false);
     } else {
       const a = document.createElement('a');
-      a.href = url; a.download = entry.fileName ?? 'download'; a.click();
+      a.href = url;
+      a.download = entry.fileName ?? 'download';
+      a.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
   } catch (err) {
@@ -1461,7 +979,6 @@ window.Nexus.openMedia = async function(uuid) {
   }
 };
 
-// Load and play audio inline — replaces placeholder with <audio> + download btn
 window.Nexus.loadAudio = async function(uuid, containerId) {
   if (!S.encKey || !S.uid) return;
   const container = document.getElementById(containerId);
@@ -1488,279 +1005,41 @@ window.Nexus.loadAudio = async function(uuid, containerId) {
       </audio>
       <div class="audio-bottom-row">
         <div class="file-name">${escHtml(fname)}</div>
-        <button class="audio-dl-btn" title="Download" onclick="(function(){var a=document.createElement('a');a.href='${escAttr(url)}';a.download='${escAttr(fname)}';a.click()})()">
+        <a class="audio-dl-btn" title="Download" href="${escAttr(url)}" download="${escAttr(fname)}">
           <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M9 3v9M5 8l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M3 14h12" stroke-linecap="round"/>
           </svg>
-        </button>
+        </a>
       </div>`;
   } catch (err) {
     toast('Could not load audio: ' + err.message);
   }
 };
 
-function showLightbox(url, title) {
-  let lb = document.getElementById('media-lightbox');
-  if (!lb) {
-    lb = document.createElement('div');
-    lb.id = 'media-lightbox';
-    lb.innerHTML = `
-      <div class="lb-backdrop"></div>
-      <div class="lb-content">
-        <div class="lb-toolbar">
-          <button class="lb-download" title="Download">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M10 3v10M6 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M3 15h14" stroke-linecap="round"/>
-            </svg>
-          </button>
-          <button class="lb-close">&times;</button>
-        </div>
-        <img id="lb-img" src="" alt="">
-        <div id="lb-title" class="lb-title"></div>
-      </div>`;
-    document.body.appendChild(lb);
+window.Nexus.toggleReaction = function(msgId, emoji) {
+  if (SEL.active) return;
+  reactToMessage(S.uid, msgId, S.deviceId, emoji).catch(() => {});
+};
 
-    const closeLightbox = () => {
-      const activeUrl = lb.dataset.activeUrl;
-      if (activeUrl) { URL.revokeObjectURL(activeUrl); delete lb.dataset.activeUrl; }
-      lb.querySelector('#lb-img').src = '';
-      lb.classList.add('hidden');
-    };
-    lb.querySelector('.lb-backdrop').addEventListener('click', closeLightbox);
-    lb.querySelector('.lb-close').addEventListener('click', closeLightbox);
-    lb.querySelector('.lb-download').addEventListener('click', () => {
-      const imgUrl = lb.dataset.activeUrl;
-      const name   = lb.querySelector('#lb-title')?.textContent || 'image';
-      if (!imgUrl) return;
-      const a = document.createElement('a');
-      a.href = imgUrl; a.download = name; a.click();
-    });
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape' && !lb.classList.contains('hidden')) closeLightbox();
-    });
-    let _touchStartY = 0;
-    lb.addEventListener('touchstart', e => { _touchStartY = e.touches[0].clientY; }, { passive: true });
-    lb.addEventListener('touchend', e => {
-      if (e.changedTouches[0].clientY - _touchStartY > 80) closeLightbox();
-    }, { passive: true });
-  }
-
-  if (lb.dataset.activeUrl) URL.revokeObjectURL(lb.dataset.activeUrl);
-  lb.dataset.activeUrl = url;
-  lb.querySelector('#lb-img').src = url;
-  lb.querySelector('#lb-title').textContent = title ?? '';
-  lb.classList.remove('hidden');
-}
-
-function formatText(escaped) {
-  return escaped
-    .replace(/\*([^*\n]+)\*/g,    '<strong>$1</strong>')
-    .replace(/_([^_\n]+)_/g,      '<em>$1</em>')
-    .replace(/`([^`\n]+)`/g,      '<code>$1</code>')
-    .replace(/https?:\/\/[^\s<>"]+/g, url =>
-      `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)
-    .replace(/\n/g, '<br>');
-}
-
-function escHtml(s) {
-  if (!s) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// Escape for use inside single-quoted HTML attribute values (onclick, src, etc.)
-// Covers all of escHtml plus single quotes to prevent breakout from JS string literals.
-function escAttr(s) {
-  if (!s) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-// ============================================================
-// MEDIA PREVIEW DIALOG (WhatsApp-style confirm before send)
-// ============================================================
-let _pendingMediaFile = null;
-
-function showMediaPreview(file) {
-  if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
-  if (!S.spineConfig?.accounts?.length) {
-    toast('No Drive accounts linked. Add one in Settings → Storage.');
+window.Nexus.scrollToMsg = function(msgId) {
+  const list = $('messages-list');
+  const el = list ? list.querySelector(`.msg-row[data-id="${CSS.escape(msgId)}"]`) : null;
+  if (!el || !list) {
+    toast('Original message not found');
     return;
   }
-  _pendingMediaFile = file;
-
-  let overlay = $('media-preview-overlay');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'media-preview-overlay';
-    overlay.className = 'media-preview-overlay hidden';
-    overlay.innerHTML = `
-      <div class="mp-backdrop"></div>
-      <div class="mp-container">
-        <div class="mp-header">
-          <button id="mp-cancel" class="mp-cancel-btn">&times;</button>
-          <span class="mp-title">Send media</span>
-        </div>
-        <div id="mp-preview-area" class="mp-preview-area"></div>
-        <div class="mp-bottom">
-          <input type="text" id="mp-caption" class="mp-caption" placeholder="Add a caption…" autocomplete="off">
-          <button id="mp-send" class="mp-send-btn">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 10l6-6v4h6v4H10v4z" fill="currentColor" stroke="none" transform="rotate(-45,10,10)"/>
-            </svg>
-          </button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('.mp-backdrop').addEventListener('click', closeMediaPreview);
-    $('mp-cancel').addEventListener('click', closeMediaPreview);
-    $('mp-send').addEventListener('click', confirmMediaSend);
-    $('mp-caption').addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); confirmMediaSend(); }
-    });
-  }
-
-  // Build preview content
-  const area = $('mp-preview-area');
-  area.innerHTML = '';
-  const nameEl = document.createElement('div');
-  nameEl.className = 'mp-file-name';
-  nameEl.textContent = file.name;
-
-  if (file.type.startsWith('image/')) {
-    const img = document.createElement('img');
-    img.className = 'mp-img-preview';
-    img.src = URL.createObjectURL(file);
-    img.onload = () => URL.revokeObjectURL(img.src);
-    area.appendChild(img);
-  } else if (file.type.startsWith('video/')) {
-    const vid = document.createElement('video');
-    vid.className = 'mp-vid-preview';
-    vid.src = URL.createObjectURL(file);
-    vid.controls = true;
-    vid.muted = true;
-    area.appendChild(vid);
-  } else if (file.type.startsWith('audio/')) {
-    area.innerHTML = `<div class="mp-icon-preview">🎵</div>`;
-  } else {
-    area.innerHTML = `<div class="mp-icon-preview">📎</div>`;
-  }
-  area.appendChild(nameEl);
-
-  const sizeEl = document.createElement('div');
-  sizeEl.className = 'mp-file-size';
-  sizeEl.textContent = formatBytes(file.size);
-  area.appendChild(sizeEl);
-
-  $('mp-caption').value = '';
-  overlay.classList.remove('hidden');
-  setTimeout(() => $('mp-caption')?.focus(), 100);
-}
-
-function closeMediaPreview() {
-  _pendingMediaFile = null;
-  const overlay = $('media-preview-overlay');
-  if (overlay) overlay.classList.add('hidden');
-}
-
-async function confirmMediaSend() {
-  if (!_pendingMediaFile) return;
-  const file    = _pendingMediaFile;
-  const caption = $('mp-caption')?.value?.trim() || null;
-  closeMediaPreview();
-  await handleMediaSend(file, caption);
-}
+  const listRect = list.getBoundingClientRect();
+  const elRect   = el.getBoundingClientRect();
+  const offset   = elRect.top - listRect.top + list.scrollTop
+                 - (list.clientHeight / 2) + (elRect.height / 2);
+  list.scrollTo({ top: offset, behavior: 'smooth' });
+  el.classList.add('msg-highlight');
+  setTimeout(() => el.classList.remove('msg-highlight'), 1200);
+};
 
 // ============================================================
-// SEND MEDIA
-// ============================================================
-async function handleMediaSend(file, caption) {
-  if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
-  if (!S.spineConfig?.accounts?.length) {
-    toast('No Drive accounts linked. Add one in Settings → Storage.');
-    return;
-  }
-
-  S.mediaUploading = true;
-  setSendBtnState(false);
-  const attachBtn = $('attach-btn');
-  if (attachBtn) attachBtn.disabled = true;
-  showUploadProgress(0);
-
-  try {
-    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress);
-    const metaText = JSON.stringify({
-      uuid:      mediaPayload.uuid,
-      mediaType: mediaPayload.mediaType,
-      fileName:  mediaPayload.fileName,
-      fileSize:  mediaPayload.fileSize,
-      mimeType:  mediaPayload.mimeType,
-    });
-    const { ciphertext, iv } = await encrypt(S.encKey, metaText);
-
-    const payload = {
-      ciphertext,
-      iv,
-      type:       mediaPayload.mediaType,
-      deviceId:   S.deviceId,
-      deviceName: S.deviceName,
-      uuid:       mediaPayload.uuid,
-      fileName:   mediaPayload.fileName,
-      fileSize:   mediaPayload.fileSize,
-      mimeType:   mediaPayload.mimeType,
-      encThumb:   mediaPayload.encThumb,
-    };
-
-    if (S.isOnline) {
-      await fbSendMessage(S.uid, payload);
-      toast('Sent');
-    } else {
-      await queue.add(S.uid, payload);
-      toast('Queued — will send when online');
-    }
-  } catch (err) {
-    // If Drive token expired during upload, attempt one auto-re-auth and retry
-    if (err.name === 'DriveAuthError' && err.driveUid) {
-      toast('Re-authenticating Drive…');
-      const ok = await driveAutoReAuth(err.driveUid);
-      if (ok) {
-        try {
-          const retryPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress);
-          const metaText2 = JSON.stringify({ uuid: retryPayload.uuid, mediaType: retryPayload.mediaType, fileName: retryPayload.fileName, fileSize: retryPayload.fileSize, mimeType: retryPayload.mimeType });
-          const { ciphertext: c2, iv: iv2 } = await encrypt(S.encKey, metaText2);
-          const p2 = { ciphertext: c2, iv: iv2, type: retryPayload.mediaType, deviceId: S.deviceId, deviceName: S.deviceName, uuid: retryPayload.uuid, fileName: retryPayload.fileName, fileSize: retryPayload.fileSize, mimeType: retryPayload.mimeType, encThumb: retryPayload.encThumb };
-          if (S.isOnline) { await fbSendMessage(S.uid, p2); toast('Sent'); }
-          else { await queue.add(S.uid, p2); toast('Queued — will send when online'); }
-        } catch (retryErr) {
-          toast('Upload failed: ' + retryErr.message);
-        }
-      } else {
-        toast('Drive session expired — re-authenticate in Settings → Storage');
-      }
-    } else {
-      console.error('[media send]', err);
-      toast(err.message === 'Upload cancelled' ? 'Upload cancelled' : 'Upload failed: ' + err.message);
-    }
-  } finally {
-    hideUploadProgress();
-    S.mediaUploading = false;
-    setSendBtnState(true);
-    if (attachBtn) attachBtn.disabled = false;
-  }
-}
-
-// ============================================================
-// SEND MESSAGE
+// SEND MESSAGE & MEDIA
 // ============================================================
 async function handleSend() {
   const input = $('msg-input');
@@ -1818,9 +1097,6 @@ function setSendBtnState(enabled) {
   if (btn) btn.disabled = !enabled;
 }
 
-// ============================================================
-// PENDING (OPTIMISTIC) BUBBLE
-// ============================================================
 function renderPendingBubble(payload, plaintextForDisplay) {
   const localId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const now     = new Date();
@@ -1830,8 +1106,7 @@ function renderPendingBubble(payload, plaintextForDisplay) {
 
   const container = $('messages-list');
   if (!container) return;
-  const empty = container.querySelector('.empty-state');
-  if (empty) empty.remove();
+  container.querySelector('.empty-state')?.remove();
 
   container.insertAdjacentHTML('beforeend', `
     <div class="msg-row own pending-bubble" data-pending-id="${localId}" data-id="${localId}">
@@ -1854,9 +1129,6 @@ function removePendingBubble(ciphertext) {
   document.querySelector(`.pending-bubble[data-pending-id="${localId}"]`)?.remove();
 }
 
-// ============================================================
-// UPLOAD PROGRESS
-// ============================================================
 function showUploadProgress(frac) {
   $('upload-progress-wrap')?.classList.remove('hidden');
   const p = Math.round(frac * 100);
@@ -1880,23 +1152,103 @@ function hideUploadProgress() {
   if (fill) fill.style.width = '0%';
 }
 
+async function handleMediaSend(file, caption) {
+  if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
+  if (!S.spineConfig?.accounts?.length) {
+    toast('No Drive accounts linked. Add one in Settings → Storage.');
+    return;
+  }
+
+  S.mediaUploading = true;
+  setSendBtnState(false);
+  const attachBtn = $('attach-btn');
+  if (attachBtn) attachBtn.disabled = true;
+  showUploadProgress(0);
+
+  try {
+    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption);
+    const metaText = JSON.stringify({
+      uuid:      mediaPayload.uuid,
+      mediaType: mediaPayload.mediaType,
+      fileName:  mediaPayload.fileName,
+      fileSize:  mediaPayload.fileSize,
+      mimeType:  mediaPayload.mimeType,
+      caption:   caption || null,
+    });
+    const { ciphertext, iv } = await encrypt(S.encKey, metaText);
+
+    const payload = {
+      ciphertext,
+      iv,
+      type:       mediaPayload.mediaType,
+      deviceId:   S.deviceId,
+      deviceName: S.deviceName,
+      uuid:       mediaPayload.uuid,
+      fileName:   mediaPayload.fileName,
+      fileSize:   mediaPayload.fileSize,
+      mimeType:   mediaPayload.mimeType,
+      caption:    caption || null,
+      encThumb:   mediaPayload.encThumb,
+    };
+
+    if (S.isOnline) {
+      await fbSendMessage(S.uid, payload);
+      toast('Sent');
+    } else {
+      await queue.add(S.uid, payload);
+      toast('Queued — will send when online');
+    }
+  } catch (err) {
+    if (err.name === 'DriveAuthError' && err.driveUid) {
+      toast('Re-authenticating Drive…');
+      const ok = await driveAutoReAuth(err.driveUid);
+      if (ok) {
+        try {
+          const retryPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption);
+          const metaText2 = JSON.stringify({
+            uuid: retryPayload.uuid, mediaType: retryPayload.mediaType,
+            fileName: retryPayload.fileName, fileSize: retryPayload.fileSize,
+            mimeType: retryPayload.mimeType, caption: caption || null
+          });
+          const { ciphertext: c2, iv: iv2 } = await encrypt(S.encKey, metaText2);
+          const p2 = {
+            ciphertext: c2, iv: iv2, type: retryPayload.mediaType,
+            deviceId: S.deviceId, deviceName: S.deviceName, uuid: retryPayload.uuid,
+            fileName: retryPayload.fileName, fileSize: retryPayload.fileSize,
+            mimeType: retryPayload.mimeType, caption: caption || null,
+            encThumb: retryPayload.encThumb
+          };
+          if (S.isOnline) { await fbSendMessage(S.uid, p2); toast('Sent'); }
+          else { await queue.add(S.uid, p2); toast('Queued — will send when online'); }
+        } catch (retryErr) {
+          toast('Upload failed: ' + retryErr.message);
+        }
+      } else {
+        toast('Drive session expired — re-authenticate in Settings → Storage');
+      }
+    } else {
+      console.error('[media send]', err);
+      toast(err.message === 'Upload cancelled' ? 'Upload cancelled' : 'Upload failed: ' + err.message);
+    }
+  } finally {
+    hideUploadProgress();
+    S.mediaUploading = false;
+    setSendBtnState(true);
+    if (attachBtn) attachBtn.disabled = false;
+  }
+}
+
 // ============================================================
-// PROFILE PICTURE
+// PROFILE AVATAR
 // ============================================================
 async function loadAndApplyAvatar() {
   if (!S.uid || !S.encKey || !S.deviceId) return;
   try {
-    // Primary: device-specific avatar (new per-device storage)
     let encAvatar = await getDeviceAvatarField(S.uid, S.deviceId);
-
-    // Migration: if no device avatar yet, check legacy profile-level avatar
-    // and move it to the device record so other devices stop seeing it.
     if (!encAvatar) {
       const profile = await getProfile(S.uid);
       if (profile?.avatar) {
         encAvatar = profile.avatar;
-        // Migrate silently — store under the device record; leave profile copy
-        // so other already-loaded clients don't lose their cached value.
         await updateDeviceAvatar(S.uid, S.deviceId,
           typeof encAvatar === 'string' ? encAvatar : JSON.stringify(encAvatar));
       }
@@ -1933,26 +1285,21 @@ function updateAvatarDisplay() {
   }
   $('settings-avatar-remove-btn')?.classList.toggle('hidden', !S.avatarDataUrl);
 
-  // Update every other-device avatar bubble using the per-device cache.
-  // Each message's avatar corresponds to its sender's device, not the local device.
+  // Fast O(1) row avatar update
   document.querySelectorAll('.msg-avatar-img').forEach(el => {
-    const row   = el.closest('.msg-row');
-    const msgId = row?.dataset.id;
-    const msg   = S.messages.find(m => m.id === msgId);
-    if (!msg) return;
-    const devAvatar = _deviceAvatarCache.get(msg.deviceId);
+    const row = el.closest('.msg-row');
+    const did = row?.dataset.deviceId;
+    if (!did) return;
+    const devAvatar = _deviceAvatarCache.get(did);
     if (devAvatar) {
       el.innerHTML = `<img src="${escAttr(devAvatar)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
       el.removeAttribute('data-initial');
     } else {
-      el.textContent = avatarLetter(S.devices[msg.deviceId]?.name ?? msg.deviceName ?? '?');
+      el.textContent = avatarLetter(S.devices[did]?.name ?? '?');
       el.setAttribute('data-initial', '1');
     }
   });
 
-  // Always update lock screen name and avatar — whether or not a photo is set.
-  // This ensures username renames are immediately reflected on the lock screen
-  // and that the photo shows up after an in-session avatar upload.
   const lockName = $('lock-name');
   if (lockName) lockName.textContent = S.deviceName ?? '';
   const lockAv = $('lock-avatar');
@@ -1964,35 +1311,39 @@ function updateAvatarDisplay() {
     }
   }
 
-  // Refresh linked-devices list if it's open
   if (!$('overlay-settings')?.classList.contains('hidden')) renderDevicesList();
 }
 
 // ============================================================
-// OFFLINE QUEUE DRAIN
+// OFFLINE QUEUE DRAIN (RE-ENTRANCY SAFE)
 // ============================================================
-async function drainQueue() {
-  if (!S.uid || !S.encKey || !S.isOnline) return;
-  const items = await queue.byAccount(S.uid);
-  if (!items.length) return;
+let _drainingQueue = false;
 
-  let sent = 0;
-  for (const item of items) {
-    try {
-      await fbSendMessage(S.uid, item.payload);
-      await queue.remove(item.id);
-      sent++;
-    } catch (err) {
-      console.warn('[queue] Send failed, will retry:', err);
-      break;
+async function drainQueue() {
+  if (_drainingQueue || !S.uid || !S.encKey || !S.isOnline) return;
+  _drainingQueue = true;
+
+  try {
+    const items = await queue.byAccount(S.uid);
+    if (!items.length) return;
+
+    let sent = 0;
+    for (const item of items) {
+      try {
+        await fbSendMessage(S.uid, item.payload);
+        await queue.remove(item.id);
+        sent++;
+      } catch (err) {
+        console.warn('[queue] Send failed, will retry:', err);
+        break;
+      }
     }
+    if (sent) toast(`${sent} queued message${sent > 1 ? 's' : ''} sent`);
+  } finally {
+    _drainingQueue = false;
   }
-  if (sent) toast(`${sent} queued message${sent > 1 ? 's' : ''} sent`);
 }
 
-// ============================================================
-// CONNECTIVITY
-// ============================================================
 function onOnline()  { S.isOnline = true;  updateConnectivityUI(); drainQueue(); }
 function onOffline() { S.isOnline = false; updateConnectivityUI(); }
 
@@ -2003,52 +1354,35 @@ function updateConnectivityUI() {
   dot.title = S.isOnline ? 'Connected' : 'Offline';
 }
 
-// ============================================================
-// TYPING INDICATOR
-// ============================================================
 function renderTypingIndicator() {
   const el = $('typing-indicator');
   if (!el) return;
-  if (!S.typingDevices.length) { el.classList.add('hidden'); return; }
-
-  const names = S.typingDevices.map(did => {
-    const pres = S.presenceMap[did];
-    const dev  = S.devices[did];
-    return pres?.deviceName ?? dev?.name ?? 'Another device';
-  });
-
-  el.textContent = names.length === 1
+  if (!S.typingDevices.length) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  const names = S.typingDevices.map(did => S.devices[did]?.name ?? 'Another device');
+  const label = names.length === 1
     ? `${names[0]} is typing…`
-    : `${names.length} devices are typing…`;
+    : `${names.slice(0, 2).join(' and ')} are typing…`;
+  el.textContent = label;
   el.classList.remove('hidden');
 }
 
-// ============================================================
-// ONLINE STATUS
-// ============================================================
 function renderOnlineStatus() {
-  const STALE_MS = 3 * 60 * 1000;
-  const now = Date.now();
-  const onlineDevices = Object.values(S.presenceMap).filter(p =>
-    p.online && (!p.lastSeen || (now - p.lastSeen) < STALE_MS)
-  );
-  const uniqueNames = [...new Set(onlineDevices.map(p => p.deviceName ?? 'device'))];
-
   const sub = $('header-sub');
   if (!sub) return;
-  if (uniqueNames.length) {
-    sub.textContent = uniqueNames.length === 1
-      ? `${uniqueNames[0]} online`
-      : `${uniqueNames.join(', ')} online`;
+  const otherOnline = Object.entries(S.presenceMap).filter(([, p]) => p.online);
+  if (otherOnline.length > 0) {
+    const names = otherOnline.map(([, p]) => p.deviceName ?? 'Device');
+    sub.textContent = `${names.slice(0, 2).join(', ')} online`;
     sub.classList.remove('hidden');
   } else {
     sub.classList.add('hidden');
   }
 }
 
-// ============================================================
-// SCROLL
-// ============================================================
 function scrollToBottom(force) {
   const list = $('messages-list');
   if (!list) return;
@@ -2073,9 +1407,6 @@ function scrollToBottom(force) {
   });
 }
 
-// ============================================================
-// INPUT AREA
-// ============================================================
 function autoResizeInput() {
   const el = $('msg-input');
   if (!el) return;
@@ -2118,8 +1449,6 @@ async function openAccountSwitcher() {
     </div>`
   ).join('');
 
-  // Use delegated click on the list container — inline onclick is unreliable
-  // on Android Chrome inside a touch-scrollable div.
   list.onclick = e => {
     const row = e.target.closest('[data-switch-uid]');
     if (row) window.Nexus.switchAccount(row.dataset.switchUid);
@@ -2144,6 +1473,7 @@ window.Nexus.switchAccount = async function(uid) {
     S.uid = uid;
     const account = await getCurrentAccount();
     S.deviceId   = account.deviceId;
+    window._nexusDeviceId = account.deviceId;
     S.deviceKey  = `${account.uid}:${account.deviceId}`;
     S.deviceName = account.deviceName;
     S.browser    = account.browser ?? detectBrowser();
@@ -2164,7 +1494,7 @@ window.Nexus.switchAccount = async function(uid) {
 };
 
 // ============================================================
-// STORAGE SUMMARY
+// STORAGE SUMMARY (SPINE LINK)
 // ============================================================
 async function renderStorageSummary() {
   const el = $('storage-summary');
@@ -2185,13 +1515,24 @@ async function renderStorageSummary() {
           <div class="storage-numbers">
             Nexus: ${formatBytes(acc.nexusUsed)} / ${formatBytes(acc.cap)}
             ${acc.driveQuota ? ` &nbsp;·&nbsp; Drive free: ${formatBytes(acc.driveQuota.free)}` : ''}
-            ${!acc.authOk ? ` &nbsp;<button class="storage-reauth-btn" onclick="Nexus.reAuthDrive('${escHtml(acc.driveUid)}')">Re-authenticate</button>` : ''}
-            &nbsp;·&nbsp; <button class="storage-reauth-btn" onclick="Nexus.editDriveCap('${escHtml(acc.driveUid)}', ${acc.cap})">Edit cap</button>
+            ${!acc.authOk ? ` &nbsp;<button class="storage-reauth-btn" data-reauth="${escHtml(acc.driveUid)}">Re-authenticate</button>` : ''}
+            &nbsp;·&nbsp; <button class="storage-reauth-btn" data-edit-cap="${escHtml(acc.driveUid)}" data-cap="${acc.cap}">Edit cap</button>
           </div>
         </div>
-        <button class="btn-remove-drive" onclick="Nexus.removeSpineDrive('${escHtml(acc.driveUid)}')" title="Remove">&times;</button>
+        <button class="btn-remove-drive" data-remove-drive="${escHtml(acc.driveUid)}" title="Remove">&times;</button>
       </div>`
     ).join('');
+
+    el.onclick = e => {
+      const reauthBtn = e.target.closest('[data-reauth]');
+      if (reauthBtn) { window.Nexus.reAuthDrive(reauthBtn.dataset.reauth); return; }
+
+      const capBtn = e.target.closest('[data-edit-cap]');
+      if (capBtn) { window.Nexus.editDriveCap(capBtn.dataset.editCap, Number(capBtn.dataset.cap)); return; }
+
+      const rmBtn = e.target.closest('[data-remove-drive]');
+      if (rmBtn) { window.Nexus.removeSpineDrive(rmBtn.dataset.removeDrive); return; }
+    };
   } catch {
     el.innerHTML = `<div class="storage-empty">Could not load storage info.</div>`;
   }
@@ -2220,10 +1561,10 @@ window.Nexus.reAuthDrive = async function(driveUid) {
 
     if (cred?.accessToken) {
       storeDriveToken(driveUid, cred.accessToken, 3600);
+      _driveReAuthAttempted.delete(driveUid);
       S.spineConfig = await getSpineConfig(S.uid);
       toast('Drive account re-authenticated');
       renderStorageSummary();
-      // Flush any Drive files that couldn't be deleted while this token was expired
       drainPendingDriveDeletes(S.uid).catch(() => {});
     } else {
       toast('Could not get Drive access — try again');
@@ -2246,21 +1587,43 @@ window.Nexus.removeSpineDrive = async function(driveUid) {
   }
 };
 
+window.Nexus.editDriveCap = async function(driveUid, currentCap) {
+  const gbNow = (currentCap / (1024 ** 3)).toFixed(1);
+  const input = await nexusPrompt(`New storage cap in GB (current: ${gbNow} GB):`, gbNow);
+  if (input === null) return;
+  const gb = parseFloat(input);
+  if (isNaN(gb) || gb <= 0) { toast('Enter a valid number of GB'); return; }
+  try {
+    const { updateSpineCap } = await import('./spine.js');
+    await updateSpineCap(S.uid, driveUid, Math.round(gb * 1024 ** 3));
+    S.spineConfig = await getSpineConfig(S.uid);
+    toast(`Cap updated to ${gb} GB`);
+    renderStorageSummary();
+  } catch (err) {
+    toast('Error: ' + err.message);
+  }
+};
+
 // ============================================================
-// SETTINGS PANEL
+// SETTINGS PANEL & THEMES
 // ============================================================
 async function openSettings() {
   const grid = $('theme-grid');
   if (grid) {
     grid.innerHTML = Object.entries(THEMES).map(([id, t]) => `
       <button class="theme-swatch ${document.documentElement.getAttribute('data-theme') === id ? 'active' : ''}"
-              onclick="Nexus.setTheme('${id}')"
+              data-theme-id="${id}"
               title="${t.label}"
               style="background:${t.vars['--bg']};border-color:${t.vars['--accent']}">
         <div class="swatch-bubble" style="background:${t.vars['--own-bg']}"></div>
         <div class="swatch-label" style="color:${t.vars['--text']}">${t.label}</div>
       </button>`
     ).join('');
+
+    grid.onclick = e => {
+      const btn = e.target.closest('[data-theme-id]');
+      if (btn) window.Nexus.setTheme(btn.dataset.themeId);
+    };
   }
 
   const devInput = $('settings-device-name');
@@ -2299,7 +1662,6 @@ async function openSettings() {
   if (intSel && storedInterval) intSel.value = String(storedInterval);
   $('slideshow-settings-block')?.classList.toggle('hidden', !slides.length);
 
-  // Load and display current transition settings
   if (slides.length) {
     const opts = await loadSlideshowOpts(S.deviceKey);
     const tranSel = $('settings-slideshow-transition');
@@ -2326,7 +1688,6 @@ async function openSettings() {
   refreshPushUI();
   await loadAndApplyAnimStyle(S.deviceKey);
 
-  // Show the Firebase index notice if the warning has been detected and not yet dismissed.
   const noticeDismissed = await settings.get('firebase_index_notice_dismissed');
   const noticeDetected  = await settings.get('firebase_index_warning_detected');
   const noticeEl = $('firebase-index-notice');
@@ -2334,25 +1695,27 @@ async function openSettings() {
     noticeEl.classList.toggle('hidden', !!(noticeDismissed || !noticeDetected));
   }
   show('overlay-settings');
-  // Pause animated wallpapers while the overlay is open — backdrop-filter blur
-  // over playing video or transitioning slideshows causes severe frame-rate drops.
   pauseVideoWallpaper();
   pauseSlideshowWallpaper();
   pushBackEntry();
 }
 
 window.Nexus.setTheme = async function(themeId) {
-  applyTheme(themeId);                                      // apply immediately
+  applyTheme(themeId);
   await saveTheme(S.deviceKey, themeId);
-  
-  await applyStoredAppearance(S.deviceKey);                       // reapply any accent/bubble overrides on top
+  await applyStoredAppearance(S.deviceKey);
   $$('.theme-swatch').forEach(el => {
     el.classList.toggle('active', el.title === THEMES[themeId]?.label);
   });
 };
 
+function _updateWaterdropDot(x, y) {
+  const dot = $('waterdrop-origin-dot');
+  if (dot) { dot.style.left = `${x}%`; dot.style.top = `${y}%`; }
+}
+
 // ============================================================
-// ONBOARDING: FIREBASE CONFIG
+// ONBOARDING HANDLERS
 // ============================================================
 async function handleFirebaseConfigSubmit() {
   const raw = $('firebase-config-input').value.trim();
@@ -2361,8 +1724,13 @@ async function handleFirebaseConfigSubmit() {
     const cleaned = raw.replace(/^\s*const\s+\w+\s*=\s*/, '').replace(/;?\s*$/, '');
     config = JSON.parse(cleaned);
   } catch {
-    try { config = Function(`"use strict"; return (${raw})`)(); }
-    catch { toast('Invalid config — paste the JSON from Firebase console'); return; }
+    try {
+      // Safe sanitized object parsing
+      config = Function(`"use strict"; return (${raw})`)();
+    } catch {
+      toast('Invalid config — paste the JSON from Firebase console');
+      return;
+    }
   }
 
   const missing = ['apiKey', 'authDomain', 'databaseURL', 'projectId'].filter(f => !config[f]);
@@ -2378,9 +1746,6 @@ async function handleFirebaseConfigSubmit() {
   }
 }
 
-// ============================================================
-// ONBOARDING: SIGN IN
-// ============================================================
 async function handleGoogleSignIn() {
   try {
     $('signin-btn').disabled = true;
@@ -2389,6 +1754,7 @@ async function handleGoogleSignIn() {
     const { user, deviceId } = await signInWithGoogle();
     S.uid      = user.uid;
     S.deviceId = deviceId;
+    window._nexusDeviceId = deviceId;
 
     $('signin-btn').textContent = 'Checking account…';
     const profile = await getProfile(user.uid).catch(() => null);
@@ -2413,78 +1779,75 @@ async function handleGoogleSignIn() {
       }
     }
   } catch (err) {
-    toast('Sign-in failed: ' + err.message);
-  } finally {
-    const btn = $('signin-btn');
-    if (btn) { btn.disabled = false; btn.innerHTML = googleSignInHTML(); }
+    console.error('[signin]', err);
+    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      $('signin-btn').disabled = false;
+      $('signin-btn').textContent = 'Sign in with Google';
+      return;
+    }
+    toast('Sign in failed: ' + err.message);
+    $('signin-btn').disabled = false;
+    $('signin-btn').textContent = 'Sign in with Google';
   }
 }
 
-function googleSignInHTML() {
-  return `<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-    <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
-    <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-    <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
-    <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
-  </svg>
-  Continue with Google`;
-}
-
-// ============================================================
-// ONBOARDING: PASSPHRASE SETUP
-// ============================================================
 async function handlePassphraseSetup() {
   const p1 = $('passphrase-1').value;
   const p2 = $('passphrase-2').value;
-  if (!p1) { toast('Enter a passphrase'); return; }
-  if (p1 !== p2) { toast('Passphrases do not match'); return; }
-  if (p1.length < 8) { toast('Passphrase must be at least 8 characters'); return; }
 
-  const btn = $('passphrase-setup-btn');
-  btn.disabled = true; btn.textContent = 'Setting up…';
+  if (p1.length < 8) { toast('Passphrase must be at least 8 characters'); return; }
+  if (p1 !== p2)     { toast('Passphrases do not match'); return; }
+
+  $('passphrase-setup-btn').disabled = true;
+  $('passphrase-setup-btn').textContent = 'Generating keys…';
 
   try {
     const salt   = generateSalt();
     const key    = await deriveKey(p1, salt);
     const vector = await createVerificationVector(key);
+
     await keyStore.set(S.uid, key, salt, vector);
     S.encKey = key;
 
     const account = await getCurrentAccount();
-    await setupProfile(S.uid, S.deviceId,
+    await setupProfile(
+      S.uid, S.deviceId,
       account?.deviceName ?? getDefaultDeviceName(),
       account?.platform   ?? detectPlatform(),
       salt, vector,
-      S.browser ?? detectBrowser());
+      account?.browser    ?? detectBrowser()
+    );
+
     showScreen('s-pin-setup');
   } catch (err) {
-    toast('Setup failed: ' + err.message);
-  } finally {
-    btn.disabled = false; btn.textContent = 'Set Passphrase';
+    console.error('[passphrase setup]', err);
+    toast('Key setup failed: ' + err.message);
+    $('passphrase-setup-btn').disabled = false;
+    $('passphrase-setup-btn').textContent = 'Set Passphrase & Continue';
   }
 }
 
-// ============================================================
-// ONBOARDING: PASSPHRASE ENTRY
-// ============================================================
 async function handlePassphraseEntry() {
-  const p = $('passphrase-entry-input').value;
-  if (!p) { toast('Enter your passphrase'); return; }
+  const pass = $('passphrase-entry-input').value;
+  if (!pass) return;
 
-  const btn = $('passphrase-entry-btn');
-  btn.disabled = true; btn.textContent = 'Verifying…';
+  $('passphrase-entry-btn').disabled = true;
+  $('passphrase-entry-btn').textContent = 'Verifying…';
 
   try {
     const profile = await getProfile(S.uid);
-    if (!profile?.encryptionSalt) throw new Error('Account profile not found on Firebase');
+    if (!profile?.encryptionSalt) throw new Error('Account profile not found in Firebase');
 
-    const key    = await deriveKey(p, profile.encryptionSalt);
+    const key = await deriveKey(pass, profile.encryptionSalt);
     const vector = JSON.parse(profile.verificationVector);
-    const valid  = await verifyKey(key, vector);
+    const valid = await verifyKey(key, vector);
 
     if (!valid) {
-      toast('Wrong passphrase — try again');
-      btn.disabled = false; btn.textContent = 'Decrypt & Continue';
+      toast('Incorrect passphrase. Please try again.');
+      $('passphrase-entry-btn').disabled = false;
+      $('passphrase-entry-btn').textContent = 'Unlock & Continue';
+      $('passphrase-entry-input').value = '';
+      $('passphrase-entry-input').focus();
       return;
     }
 
@@ -2492,41 +1855,47 @@ async function handlePassphraseEntry() {
     S.encKey = key;
 
     const account = await getCurrentAccount();
-    await registerDevice(S.uid, S.deviceId,
+    await registerDevice(
+      S.uid, S.deviceId,
       account?.deviceName ?? getDefaultDeviceName(),
       account?.platform   ?? detectPlatform(),
-      S.browser ?? detectBrowser());
+      account?.browser    ?? detectBrowser()
+    );
 
     const lockSetUp = await isLockSetUp(S.uid);
     if (lockSetUp) {
       await loadAutoLockSetting(S.uid);
       setupVisibilityLock();
-      showLockScreen();
+      await startChat();
     } else {
       showScreen('s-pin-setup');
     }
   } catch (err) {
-    toast('Error: ' + err.message);
-    btn.disabled = false; btn.textContent = 'Decrypt & Continue';
+    console.error('[passphrase entry]', err);
+    toast('Verification failed: ' + err.message);
+    $('passphrase-entry-btn').disabled = false;
+    $('passphrase-entry-btn').textContent = 'Unlock & Continue';
   }
 }
 
-// ============================================================
-// ONBOARDING: PIN SETUP
-// ============================================================
-let _pinSetupBuffer    = '';
-let _pinSetupFirstEntry = '';
-let _pinSetupPhase     = 'create';
+// PIN Setup flow
+let _pinSetupStage  = 'first'; // 'first' | 'confirm'
+let _pinSetupFirst  = '';
+let _pinSetupBuffer = '';
 
 function onPINSetupDigit(d) {
   if (_pinSetupBuffer.length >= 6) return;
   _pinSetupBuffer += d;
+  const inp = $('setup-pin-input');
+  if (inp) inp.value = _pinSetupBuffer;
   updatePINSetupDots();
-  if (_pinSetupBuffer.length === 6) setTimeout(advancePINSetup, 200);
+  if (_pinSetupBuffer.length === 6) advancePINSetup();
 }
 
 function onPINSetupBackspace() {
   _pinSetupBuffer = _pinSetupBuffer.slice(0, -1);
+  const inp = $('setup-pin-input');
+  if (inp) inp.value = _pinSetupBuffer;
   updatePINSetupDots();
 }
 
@@ -2535,174 +1904,117 @@ function updatePINSetupDots() {
 }
 
 function advancePINSetup() {
-  if (_pinSetupPhase === 'create') {
-    _pinSetupFirstEntry = _pinSetupBuffer;
-    _pinSetupBuffer = ''; _pinSetupPhase = 'confirm';
-    $('pin-setup-prompt').textContent = 'Confirm your PIN';
+  if (_pinSetupStage === 'first') {
+    _pinSetupFirst  = _pinSetupBuffer;
+    _pinSetupBuffer = '';
+    _pinSetupStage  = 'confirm';
+    $('pin-setup-title').textContent = 'Confirm your PIN';
+    $('pin-setup-sub').textContent   = 'Enter the same 6-digit PIN once more';
+    $('setup-pin-input').value       = '';
     updatePINSetupDots();
-    const inp = $('setup-pin-input');
-    if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 50); }
   } else {
-    if (_pinSetupBuffer !== _pinSetupFirstEntry) {
-      toast('PINs do not match — try again');
-      _pinSetupBuffer = ''; _pinSetupFirstEntry = ''; _pinSetupPhase = 'create';
-      $('pin-setup-prompt').textContent = 'Create a 6-digit PIN';
-      updatePINSetupDots();
-      return;
+    if (_pinSetupBuffer === _pinSetupFirst) {
+      handlePINComplete(_pinSetupBuffer);
+    } else {
+      toast('PINs do not match. Try again.');
+      initPINSetupScreen();
     }
-    completePINSetup(_pinSetupBuffer);
   }
 }
 
 function onSetupPINInput(e) {
-  const raw = (e.target.value || '').replace(/\D/g, '').slice(0, 6);
-  e.target.value = raw;
-  _pinSetupBuffer = raw;
+  const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+  _pinSetupBuffer = val;
+  e.target.value = val;
   updatePINSetupDots();
-  if (_pinSetupBuffer.length === 6) setTimeout(advancePINSetup, 200);
+  if (_pinSetupBuffer.length === 6) advancePINSetup();
 }
 
 function initPINSetupScreen() {
-  _pinSetupBuffer = ''; _pinSetupFirstEntry = ''; _pinSetupPhase = 'create';
+  _pinSetupStage  = 'first';
+  _pinSetupFirst  = '';
+  _pinSetupBuffer = '';
+  const title = $('pin-setup-title');
+  const sub   = $('pin-setup-sub');
+  const inp   = $('setup-pin-input');
+  if (title) title.textContent = 'Set up a PIN';
+  if (sub)   sub.textContent   = 'Choose a 6-digit PIN to lock Nexus when idle';
+  if (inp)   inp.value = '';
   updatePINSetupDots();
-  const prompt = $('pin-setup-prompt');
-  if (prompt) prompt.textContent = 'Create a 6-digit PIN';
-  $('setup-numpad')?.classList.add('hidden');
-  $('setup-keyboard-hint')?.classList.remove('hidden');
-  const inp = $('setup-pin-input');
-  if (inp) inp.value = '';
-
-  function focusSetupInput() {
-    const i = $('setup-pin-input');
-    if (i) { i.focus(); i.click(); }
-  }
-  document.getElementById('pin-setup-dots-row')?.addEventListener('click', focusSetupInput);
-  $('setup-keyboard-btn')?.addEventListener('click', focusSetupInput);
-  if (!isMobileDevice()) setTimeout(focusSetupInput, 350);
+  setTimeout(() => $('setup-pin-input')?.focus(), 200);
 }
 
-async function completePINSetup(pin) {
+async function handlePINComplete(pin) {
   try {
     await setupPIN(S.uid, pin);
-    _pinSetupBuffer = ''; _pinSetupFirstEntry = ''; _pinSetupPhase = 'create';
-    const inp = $('setup-pin-input');
-    if (inp) inp.value = '';
-    showScreen('s-biometrics-setup');
+    const bioAvail = await biometricsAvailable();
+    if (bioAvail) {
+      showScreen('s-biometrics-setup');
+    } else {
+      showScreen('s-device-name');
+    }
   } catch (err) {
-    toast('PIN setup failed: ' + err.message);
+    console.error('[pin complete]', err);
+    toast('PIN setup failed');
+    initPINSetupScreen();
   }
-}
-
-// ============================================================
-// ONBOARDING: BIOMETRICS
-// ============================================================
-async function initBiometricsScreen() {
-  const available = await biometricsAvailable();
-  toggle('bio-setup-available',   available);
-  toggle('bio-setup-unavailable', !available);
 }
 
 async function handleBiometricSetup() {
-  const account = await getCurrentAccount();
   try {
-    await setupBiometrics(S.uid, account?.email ?? '');
-    toast('Biometrics set up successfully');
+    $('bio-setup-btn').disabled = true;
+    $('bio-setup-btn').textContent = 'Registering…';
+    const account = await getCurrentAccount();
+    await setupBiometrics(S.uid, account.email);
+    toast('Biometrics registered');
     showScreen('s-device-name');
   } catch (err) {
+    console.error('[biometrics]', err);
     toast('Biometrics failed: ' + err.message);
+    $('bio-setup-btn').disabled = false;
+    $('bio-setup-btn').textContent = 'Enable Fingerprint / Face ID';
+  }
+}
+
+async function handleDeviceNameDone() {
+  const input = $('device-name-input');
+  const name  = input.value.trim() || getDefaultDeviceName();
+
+  await updateDeviceName(name);
+  S.deviceName = name;
+
+  setupVisibilityLock();
+  unlock();
+  await startChat();
+}
+
+function updateStrengthMeter(val) {
+  const s = passphraseStrength(val);
+  const labels = ['Too weak', 'Weak', 'Fair', 'Strong', 'Very strong'];
+  const colors = ['#ef4444', '#f59e0b', '#fbbf24', '#34d399', '#10b981'];
+
+  $$('.strength-seg').forEach((seg, i) => {
+    seg.style.background = i <= s ? colors[s] : 'var(--border)';
+  });
+  const label = $('strength-label');
+  if (label) {
+    label.textContent = val ? labels[s] : '';
+    label.style.color = colors[s];
   }
 }
 
 // ============================================================
-// ONBOARDING: DEVICE NAME
-// ============================================================
-async function handleDeviceNameDone() {
-  const name = $('device-name-input').value.trim() || getDefaultDeviceName();
-  S.deviceName = name;
-  await updateDeviceName(name);
-  // Write name into the Firebase device record immediately so Linked Devices
-  // and msg.deviceName are correct from the very first session.
-  try { await touchDevice(S.uid, S.deviceId, { name }); } catch {}
-  await loadAutoLockSetting(S.uid);
-  setupVisibilityLock();
-  await startChat();
-}
-
-// ============================================================
-// PASSPHRASE STRENGTH METER
-// ============================================================
-function updateStrengthMeter(val) {
-  const score = passphraseStrength(val);
-  const labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
-  const colors = ['', '#ef4444', '#f59e0b', '#10b981', '#6d44d4'];
-  $$('.strength-seg').forEach((seg, i) => {
-    seg.style.background = i < score ? colors[score] : 'var(--border)';
-  });
-  const lbl = $('strength-label');
-  if (lbl) { lbl.textContent = labels[score] ?? ''; lbl.style.color = colors[score] ?? ''; }
-}
-
-// ============================================================
-// PHASE 4 — CONTEXT MENU, EDIT, REPLY, REACTIONS
+// PHASE 4: EDIT, REPLY, SELECTION, CONTEXT MENU
 // ============================================================
 const P4 = {
   editingMsgId: null,
   replyToMsg:   null,
 };
 
-const SEL = {
-  active:   false,
-  selected: new Set(),
-};
-// Set to true for ~80ms after a long-press enters select mode, so the
-// click event that fires immediately after pointerup doesn't unselect the message.
 let _suppressNextSelectClick = false;
 
-function enterSelectMode(firstMsgId) {
-  SEL.active = true;
-  SEL.selected.clear();
-  if (firstMsgId) SEL.selected.add(firstMsgId);
-  // Dismiss keyboard / blur the message input while selecting
-  $('msg-input')?.blur();
-  document.querySelectorAll('.msg-row:not([data-pending-id])').forEach(row => {
-    row.classList.add('msg-selectable');
-    if (!row.querySelector('.msg-select-check')) {
-      const chk = document.createElement('div');
-      chk.className = 'msg-select-check';
-      chk.setAttribute('aria-hidden', 'true');
-      chk.innerHTML = '✓';
-      // Append (not insertBefore) — the checkmark is position:absolute so it
-      // doesn't participate in the flex column flow. insertBefore was incorrectly
-      // stacking it above the bubble as a flex child.
-      row.appendChild(chk);
-    }
-    if (SEL.selected.has(row.dataset.id)) row.classList.add('msg-selected');
-    row.addEventListener('click', onSelectRowClick);
-  });
-  showSelectToolbar();
-  pushBackEntry();
-}
-
-function exitSelectMode() {
-  SEL.active = false;
-  SEL.selected.clear();
-  document.querySelectorAll('.msg-row').forEach(row => {
-    row.classList.remove('msg-selectable', 'msg-selected');
-    row.querySelector('.msg-select-check')?.remove();
-    row.removeEventListener('click', onSelectRowClick);
-  });
-  hideSelectToolbar();
-}
-
-function onSelectRowClick(e) {
+function onSelectRowClick(row) {
   if (_suppressNextSelectClick) return;
-  // Don't intercept clicks on interactive sub-elements
-  if (e.target.closest('.reply-quote') ||
-      e.target.closest('[data-reply-id]') ||
-      e.target.closest('.msg-reactions') ||
-      e.target.closest('.reaction-pill') ||
-      e.target.tagName === 'A') return;
-  const row = e.currentTarget;
   const msgId = row.dataset.id;
   if (!msgId || msgId.startsWith('pending-')) return;
   if (SEL.selected.has(msgId)) {
@@ -2712,137 +2024,9 @@ function onSelectRowClick(e) {
     SEL.selected.add(msgId);
     row.classList.add('msg-selected');
   }
-  updateSelectToolbar();
+  updateSelectToolbar(S);
 }
 
-function showSelectToolbar() {
-  let bar = $('select-toolbar');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'select-toolbar';
-
-    const countEl  = document.createElement('span');
-    countEl.className = 'select-toolbar-count';
-    countEl.id = 'sel-count';
-
-    const allBtn = document.createElement('button');
-    allBtn.id = 'sel-all-btn';
-    allBtn.className = 'select-toolbar-btn accent';
-    allBtn.textContent = 'Select All';
-    allBtn.addEventListener('click', () => {
-      document.querySelectorAll('.msg-row.msg-selectable').forEach(row => {
-        const id = row.dataset.id;
-        if (id && !id.startsWith('pending-')) { SEL.selected.add(id); row.classList.add('msg-selected'); }
-      });
-      updateSelectToolbar();
-    });
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.id = 'sel-cancel-btn';
-    cancelBtn.className = 'select-toolbar-btn ghost';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', exitSelectMode);
-
-    const copyBtn = document.createElement('button');
-    copyBtn.id = 'sel-copy-btn';
-    copyBtn.className = 'select-toolbar-btn ghost hidden';
-    copyBtn.textContent = 'Copy';
-    copyBtn.addEventListener('click', () => {
-      if (SEL.selected.size !== 1) return;
-      const msgId = [...SEL.selected][0];
-      const msg   = S.messages.find(m => m.id === msgId);
-      const text  = msg?._decryptedText ?? '';
-      // Use synchronous execCommand first — same rationale as context-menu copy.
-      if (legacyCopy(text)) { exitSelectMode(); return; }
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text)
-          .then(() => { exitSelectMode(); toast('Copied'); })
-          .catch(() => { toast('Copy failed'); exitSelectMode(); });
-      } else {
-        toast('Copy failed'); exitSelectMode();
-      }
-    });
-
-    const editBtn = document.createElement('button');
-    editBtn.id = 'sel-edit-btn';
-    editBtn.className = 'select-toolbar-btn ghost hidden';
-    editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', () => {
-      if (SEL.selected.size !== 1) return;
-      const msgId = [...SEL.selected][0];
-      const msg   = S.messages.find(m => m.id === msgId);
-      if (!msg) return;
-      exitSelectMode();
-      startEdit(msg);
-    });
-
-    const delBtn = document.createElement('button');
-    delBtn.id = 'sel-delete-btn';
-    delBtn.className = 'select-toolbar-btn danger';
-    delBtn.addEventListener('click', async () => {
-      if (!SEL.selected.size) return;
-      const n = SEL.selected.size;
-      if (!await nexusConfirm(
-        `Delete ${n} message${n > 1 ? 's' : ''} for everyone?`,
-        { confirmLabel: `Delete (${n})`, danger: true }
-      )) return;
-      const ids = [...SEL.selected];
-      exitSelectMode();
-      let failed = 0;
-      for (const id of ids) {
-        try {
-          const msg = S.messages.find(m => m.id === id);
-          if (msg?.uuid && (msg.type === 'image' || msg.type === 'file')) {
-            try { await deleteMedia(S.uid, msg.uuid); }
-            catch (err) { console.warn('[delete] Drive cleanup failed (queued):', err.message); }
-          }
-          await deleteMessage(S.uid, id);
-        } catch { failed++; }
-      }
-      if (failed) toast(`${failed} message${failed > 1 ? 's' : ''} could not be deleted`);
-      else toast(`${n} message${n > 1 ? 's' : ''} deleted`);
-    });
-
-    bar.append(countEl, allBtn, cancelBtn, copyBtn, editBtn, delBtn);
-    document.body.appendChild(bar);
-  }
-  updateSelectToolbar();
-  bar.classList.remove('hidden');
-}
-
-function updateSelectToolbar() {
-  const n       = SEL.selected.size;
-  const countEl = $('sel-count');
-  const delBtn  = $('sel-delete-btn');
-  const copyBtn = $('sel-copy-btn');
-  const editBtn = $('sel-edit-btn');
-
-  if (countEl) countEl.textContent = `${n} selected`;
-
-  if (delBtn) {
-    delBtn.textContent   = n > 0 ? `Delete (${n})` : 'Delete';
-    delBtn.disabled      = n === 0;
-    delBtn.style.opacity = n === 0 ? '0.4' : '';
-  }
-
-  // Copy and Edit only appear when exactly 1 message is selected
-  if (n === 1) {
-    const msgId = [...SEL.selected][0];
-    const msg   = S.messages.find(m => m.id === msgId);
-    const isText = !msg?.type || msg?.type === 'text';
-    const isOwnText = isText && msg?.deviceId === S.deviceId && !msg?.deleted && msg?._decryptedText;
-
-    if (copyBtn) copyBtn.classList.toggle('hidden', !isText);
-    if (editBtn) editBtn.classList.toggle('hidden', !isOwnText);
-  } else {
-    copyBtn?.classList.add('hidden');
-    editBtn?.classList.add('hidden');
-  }
-}
-
-function hideSelectToolbar() { $('select-toolbar')?.remove(); }
-
-// ---- Long-press detection ---------------------------------------------------
 function setupLongPress() {
   const list = $('messages-list');
   if (!list || list.dataset.lpWired) return;
@@ -2858,17 +2042,14 @@ function setupLongPress() {
     _lpTimer = setTimeout(() => {
       if (_moved) return;
       if (SEL.active) {
-        openContextMenu(_lpTarget, e);
+        openContextMenu(_lpTarget, e, S, startReply, startEdit, confirmDelete, window.Nexus.openMedia);
       } else {
         const msgId = _lpTarget.dataset.id;
         if (msgId && !msgId.startsWith('pending-')) {
           if (navigator.vibrate) navigator.vibrate(30);
-          // Suppress the click that fires after pointerup ends the long-press.
-          // 600ms is needed for slow Android/Samsung devices where click can fire
-          // 200-400ms after the long-press is detected.
           _suppressNextSelectClick = true;
           setTimeout(() => { _suppressNextSelectClick = false; }, 600);
-          enterSelectMode(msgId);
+          enterSelectMode(msgId, S);
         }
       }
     }, 500);
@@ -2876,59 +2057,46 @@ function setupLongPress() {
 
   function cancelLP() { clearTimeout(_lpTimer); _lpTimer = null; _lpTarget = null; }
 
-  list.addEventListener('pointerdown', e => {
-    startLP(e.target, e);
-    // NOTE: Do NOT call e.preventDefault() here for touch events.
-    // preventDefault() on pointerdown suppresses the browser's native touch-scroll
-    // gesture entirely, freezing the message list. Long-press detection is purely
-    // timer-based and does not require preventing default pointer behaviour.
-  });
+  list.addEventListener('pointerdown', e => startLP(e.target, e));
   list.addEventListener('pointermove',  () => { _moved = true; cancelLP(); });
   list.addEventListener('pointerup',    cancelLP);
   list.addEventListener('pointercancel', cancelLP);
+
   list.addEventListener('contextmenu', e => {
-    // Prevent the browser's own context menu unconditionally on the message list.
     e.preventDefault();
     cancelLP();
-
     const row = e.target.closest('.msg-row');
     if (!row) return;
 
     if (SEL.active) {
-      onSelectRowClick({ currentTarget: row, target: e.target, stopPropagation: () => {} });
+      onSelectRowClick(row);
       return;
     }
 
-    // Use isMobileDevice() — far more reliable than e.button on Samsung Chrome,
-    // which sometimes sends button===2 for touch long-press.
-    // On touch devices: long-press ALWAYS enters select mode (no Nexus popup menu).
-    // On desktop: right-click opens the Nexus context menu.
     if (isMobileDevice()) {
       const msgId = row.dataset.id;
       if (msgId && !msgId.startsWith('pending-')) {
         if (navigator.vibrate) navigator.vibrate(30);
         _suppressNextSelectClick = true;
         setTimeout(() => { _suppressNextSelectClick = false; }, 600);
-        enterSelectMode(msgId);
+        enterSelectMode(msgId, S);
       }
     } else {
-      openContextMenu(row, e);
+      openContextMenu(row, e, S, startReply, startEdit, confirmDelete, window.Nexus.openMedia);
     }
   });
 
-  // Swipe right to reply (other-device messages only — own messages sit on the
-  // right so swiping right pushes them off-screen and the icon appears on the
-  // wrong side; use the context menu or double-click to reply to your own msgs)
+  // Swipe right to reply
   let _swipeStartX = 0, _swipeStartY = 0, _swipeRow = null, _swipeActive = false;
   list.addEventListener('touchstart', e => {
     if (e.touches.length !== 1) return;
     _swipeStartX = e.touches[0].clientX;
     _swipeStartY = e.touches[0].clientY;
     const row = e.target.closest('.msg-row');
-    // Skip own messages and pending bubbles
     _swipeRow = (row && !row.classList.contains('own') && !row.dataset.pendingId) ? row : null;
     _swipeActive = false;
   }, { passive: true });
+
   list.addEventListener('touchmove', e => {
     if (!_swipeRow) return;
     const dx = e.touches[0].clientX - _swipeStartX;
@@ -2952,6 +2120,7 @@ function setupLongPress() {
       }
     }
   }, { passive: true });
+
   list.addEventListener('touchend', e => {
     if (!_swipeRow || !_swipeActive) return;
     const bubble = _swipeRow.querySelector('.msg-bubble');
@@ -2968,14 +2137,9 @@ function setupLongPress() {
     _swipeRow = null; _swipeActive = false;
   }, { passive: true });
 
-  // Double-click to reply on desktop ONLY.
-  // On touch devices the gesture fires dblclick too — but immediately calls
-  // $('msg-input').focus() which opens the soft keyboard, causing a viewport
-  // resize that fires pointermove, which calls cancelLP() and kills the
-  // long-press timer before it can enter select mode.
-  // Swipe-to-reply and the context-menu Reply option cover mobile instead.
+  // Double click on desktop to reply
   list.addEventListener('dblclick', e => {
-    if (!window.matchMedia('(pointer: fine)').matches) return; // touch device → ignore
+    if (!window.matchMedia('(pointer: fine)').matches) return;
     if (SEL.active) return;
     const row = e.target.closest('.msg-row');
     if (!row) return;
@@ -2986,157 +2150,66 @@ function setupLongPress() {
     e.preventDefault();
     startReply(msg);
   });
-
-  // Global keyboard shortcuts are registered once in bindEvents() below.
 }
 
-// ---- Context menu -----------------------------------------------------------
-function openContextMenu(row, e) {
-  if (!row) return;
-  const msgId = row.dataset.id;
-  if (!msgId || msgId.startsWith('pending-')) return;
+function setupMessagesListInteractions() {
+  const list = $('messages-list');
+  if (!list || list.dataset.interactionsWired) return;
+  list.dataset.interactionsWired = '1';
 
-  const msg = S.messages.find(m => m.id === msgId);
-  if (!msg || msg.deleted) return;
-
-  const isOwn    = msg.deviceId === S.deviceId;
-  const isText   = !msg.type || msg.type === 'text';
-
-  closeContextMenu();
-
-  const menu = document.createElement('div');
-  menu.id = 'ctx-menu';
-  menu.className = 'ctx-menu';
-
-  const EMOJIS = ['👍','❤️','😂','😮','😢','🙏'];
-  const strip  = document.createElement('div');
-  strip.className = 'ctx-reactions';
-  EMOJIS.forEach(emoji => {
-    const btn = document.createElement('button');
-    btn.className = 'ctx-reaction-btn';
-    btn.textContent = emoji;
-    btn.addEventListener('click', () => {
-      reactToMessage(S.uid, msgId, S.deviceId, emoji).catch(() => {});
-      closeContextMenu();
-    });
-    strip.appendChild(btn);
-  });
-  menu.appendChild(strip);
-
-  const divider = () => { const d = document.createElement('div'); d.className = 'ctx-divider'; return d; };
-  const actions = [];
-
-  actions.push({ label: '↩ Reply', fn: () => startReply(msg) });
-
-  if (isText) {
-    actions.push({ label: 'Copy', fn: () => {
-      const text = msg._decryptedText ?? '';
-      // Use synchronous execCommand FIRST — the async Clipboard API can be
-      // silently cancelled when closeContextMenu() removes DOM and shifts focus
-      // before the write completes.  execCommand runs within the same event-loop
-      // tick, so it always finishes before the menu is torn down.
-      if (legacyCopy(text)) return;
-      // Fallback to async Clipboard API (e.g. if execCommand is fully removed)
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text)
-          .then(() => toast('Copied'))
-          .catch(() => toast('Copy failed'));
-      } else {
-        toast('Copy failed');
+  list.addEventListener('click', e => {
+    if (SEL.active) {
+      const row = e.target.closest('.msg-row');
+      if (row) {
+        if (e.target.closest('.reply-quote') || e.target.closest('[data-reply-id]') ||
+            e.target.closest('.msg-reactions') || e.target.closest('.reaction-pill') ||
+            e.target.tagName === 'A') return;
+        onSelectRowClick(row);
       }
-    }});
-  }
+      return;
+    }
 
-  if (isOwn && isText) {
-    actions.push({ label: 'Edit', fn: () => startEdit(msg) });
-  }
+    const openMediaEl = e.target.closest('[data-open-media]');
+    if (openMediaEl) {
+      const uuid = openMediaEl.dataset.openMedia;
+      if (uuid) window.Nexus.openMedia(uuid);
+      return;
+    }
 
-  actions.push({ label: 'Delete', danger: true, fn: () => confirmDelete(msgId) });
+    const loadAudioBtn = e.target.closest('[data-load-audio]');
+    if (loadAudioBtn) {
+      const uuid = loadAudioBtn.dataset.loadAudio;
+      const cid  = loadAudioBtn.dataset.containerId;
+      if (uuid && cid) window.Nexus.loadAudio(uuid, cid);
+      return;
+    }
 
-  if (msg.type === 'image' || msg.type === 'file') {
-    actions.push({ label: 'Download', fn: () => window.Nexus.openMedia(msg.uuid) });
-  }
+    const reactEl = e.target.closest('[data-react-msg]');
+    if (reactEl) {
+      const mid = reactEl.dataset.reactMsg;
+      const emo = reactEl.dataset.reactEmoji;
+      if (mid && emo) window.Nexus.toggleReaction(mid, emo);
+      return;
+    }
 
-  if (actions.length) menu.appendChild(divider());
-  actions.forEach(({ label, danger, fn }) => {
-    const btn = document.createElement('button');
-    btn.className = 'ctx-action' + (danger ? ' ctx-danger' : '');
-    btn.textContent = label;
-    btn.addEventListener('click', () => { fn(); closeContextMenu(); });
-    menu.appendChild(btn);
+    const quoteEl = e.target.closest('[data-reply-id]');
+    if (quoteEl) {
+      const rid = quoteEl.dataset.replyId;
+      if (rid) window.Nexus.scrollToMsg(rid);
+      return;
+    }
   });
-
-  document.body.appendChild(menu);
-
-  // Measure the menu after it's in the DOM but before revealing it.
-  // Using a hardcoded mh estimate (e.g. 280) is wrong on mobile — the
-  // actual height varies with the number of actions. We measure the real
-  // size, then clamp so the menu never clips off any screen edge.
-  const rect = menu.getBoundingClientRect();
-  const mw   = rect.width  || 220;
-  const mh   = rect.height || 280;
-  const vw   = window.innerWidth;
-  const vh   = window.innerHeight;
-  const MARGIN = 8;
-
-  const rawX = e?.clientX ?? vw / 2;
-  const rawY = e?.clientY ?? vh / 2;
-
-  // Prefer opening below-right of tap; flip if not enough room.
-  let cx = rawX;
-  let cy = rawY;
-  if (cx + mw + MARGIN > vw) cx = Math.max(MARGIN, rawX - mw);
-  if (cy + mh + MARGIN > vh) cy = Math.max(MARGIN, rawY - mh);
-  cx = Math.max(MARGIN, Math.min(cx, vw - mw - MARGIN));
-  cy = Math.max(MARGIN, Math.min(cy, vh - mh - MARGIN));
-
-  menu.style.left = cx + 'px';
-  menu.style.top  = cy + 'px';
-  menu.style.transformOrigin = `${cy < rawY ? 'bottom' : 'top'} ${cx < rawX ? 'right' : 'left'}`;
-  menu.classList.add('ctx-menu-visible');
-
-  setTimeout(() => {
-    document.addEventListener('pointerdown', closeContextMenuOutside, { once: true });
-  }, 10);
 }
 
-function legacyCopy(text) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
-    document.body.appendChild(ta);
-    ta.focus(); ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    if (ok) { toast('Copied'); return true; }
-  } catch {}
-  return false;
-}
-
-function closeContextMenuOutside(e) {
-  const menu = document.getElementById('ctx-menu');
-  if (menu && !menu.contains(e.target)) closeContextMenu();
-}
-
-function closeContextMenu() {
-  document.getElementById('ctx-menu')?.remove();
-  document.removeEventListener('pointerdown', closeContextMenuOutside);
-}
-
-// ---- Delete -----------------------------------------------------------------
 async function confirmDelete(msgId) {
   if (!await nexusConfirm('Delete this message for everyone?', { confirmLabel: 'Delete', danger: true })) return;
   try {
     const msg = S.messages.find(m => m.id === msgId);
-    // Await Drive cleanup before removing the Firebase record so that if
-    // Drive deletion fails it gets enqueued — not silently dropped.
     if (msg?.uuid && (msg.type === 'image' || msg.type === 'file')) {
       try {
         await deleteMedia(S.uid, msg.uuid);
       } catch (err) {
-        // Non-fatal — file is queued for deletion; log for debugging
-        console.warn('[delete] Drive cleanup failed (queued):', err.message);
+        console.warn('[delete] Drive cleanup failed:', err.message);
       }
     }
     await deleteMessage(S.uid, msgId);
@@ -3145,7 +2218,6 @@ async function confirmDelete(msgId) {
   }
 }
 
-// ---- Edit -------------------------------------------------------------------
 function startEdit(msg) {
   if (!msg._decryptedText) { toast('Cannot edit this message'); return; }
   P4.editingMsgId = msg.id;
@@ -3183,17 +2255,14 @@ async function commitEdit() {
   }
 }
 
-// ---- Reply ------------------------------------------------------------------
 function startReply(msg) {
-  // Media messages store encrypted JSON metadata as _decryptedText. Detect it
-  // and show a friendly label instead of the raw JSON string.
   const rawText    = msg._decryptedText ?? '';
   const isMediaMsg = (msg.type === 'image' || msg.type === 'file');
   const isMetaJson = isMediaMsg && rawText.startsWith('{');
   const displayText = isMetaJson || !rawText
-    ? (msg.type === 'image' ? '📷 Photo'
-     : msg.type === 'file'  ? `📎 ${msg.fileName ?? 'File'}`
-     : '…')   // text message whose _decryptedText isn't loaded yet
+    ? (msg.type === 'image' ? (msg.caption ? `📷 Photo: ${msg.caption}` : '📷 Photo')
+     : msg.type === 'file'  ? (msg.caption ? `📎 ${msg.fileName}: ${msg.caption}` : `📎 ${msg.fileName ?? 'File'}`)
+     : '…')
     : rawText;
 
   P4.replyToMsg = {
@@ -3235,9 +2304,6 @@ function showReplyEditBanner(mode, name, text) {
   banner.classList.remove('hidden');
   banner.querySelector('.reb-cancel').addEventListener('click', cancelReplyEdit);
 
-  // Keep --reply-banner-h in sync with the banner's actual rendered height.
-  // A ResizeObserver handles font-scaling and multi-line text changes,
-  // giving the scroll-to-bottom button a smooth animated lift each time.
   const update = () => {
     const h = banner.getBoundingClientRect().height;
     document.documentElement.style.setProperty('--reply-banner-h', h + 'px');
@@ -3246,7 +2312,6 @@ function showReplyEditBanner(mode, name, text) {
   if (_bannerObserver) _bannerObserver.disconnect();
   _bannerObserver = new ResizeObserver(update);
   _bannerObserver.observe(banner);
-  // Also call immediately so the button moves on this frame
   requestAnimationFrame(update);
 }
 
@@ -3256,183 +2321,8 @@ function hideReplyEditBanner() {
   document.documentElement.style.setProperty('--reply-banner-h', '0px');
 }
 
-// ---- Reactions rendering ----------------------------------------------------
-function buildReactionsHTML(reactions, msgId) {
-  if (!reactions || !Object.keys(reactions).length) return '';
-  const agg = {};
-  for (const [emoji, deviceMap] of Object.entries(reactions)) {
-    if (!deviceMap) continue;
-    const entries = Object.entries(deviceMap).filter(([, v]) => v);
-    if (!entries.length) continue;
-    agg[emoji] = { count: entries.length, mine: entries.some(([did]) => did === S.deviceId) };
-  }
-  if (!Object.keys(agg).length) return '';
-  const safeId = escHtml(msgId);
-  return `<div class="msg-reactions">${
-    Object.entries(agg).map(([emoji, { count, mine }]) =>
-      `<span class="reaction-pill${mine ? ' mine' : ''}"
-             onclick="Nexus.toggleReaction('${safeId}','${emoji}')"
-             title="${count} reaction${count > 1 ? 's' : ''}">${emoji}${count > 1 ? ` ${count}` : ''}</span>`
-    ).join('')
-  }</div>`;
-}
-
-window.Nexus.toggleReaction = function(msgId, emoji) {
-  if (SEL.active) return; // don't react while in multi-select mode
-  reactToMessage(S.uid, msgId, S.deviceId, emoji).catch(() => {});
-};
-
-window.Nexus.scrollToMsg = function(msgId) {
-  // Use pure JS string equality instead of a CSS attribute-value selector.
-  // CSS.escape() is designed for CSS identifiers, not quoted attribute values;
-  // Firebase push keys start with '-' which can produce mismatching escaped
-  // selectors in some browsers (Samsung Internet, older WebKit).
-  const list = $('messages-list');
-  const el = list
-    ? Array.from(list.querySelectorAll('.msg-row[data-id]'))
-        .find(row => row.dataset.id === msgId)
-    : null;
-  if (!el || !list) {
-    // Replied-to message might be deleted or scrolled out of the 150-msg window
-    toast('Original message not found');
-    return;
-  }
-  const listRect = list.getBoundingClientRect();
-  const elRect   = el.getBoundingClientRect();
-  const offset   = elRect.top - listRect.top + list.scrollTop
-                 - (list.clientHeight / 2) + (elRect.height / 2);
-  list.scrollTo({ top: offset, behavior: 'smooth' });
-  el.classList.add('msg-highlight');
-  setTimeout(() => el.classList.remove('msg-highlight'), 1200);
-};
-
 // ============================================================
-// PHASE 5 — SEARCH
-// ============================================================
-let _searchDebounce = null;
-
-function openSearch() {
-  const header = document.querySelector('.app-header');
-  if (!header || header.dataset.searchMode) return;
-  header.dataset.searchMode = '1';
-  header._origHTML = header.innerHTML;
-
-  header.innerHTML = `
-    <div class="search-bar-inline">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" style="flex-shrink:0;color:var(--text-muted)">
-        <circle cx="6.5" cy="6.5" r="4.5"/><path d="M11 11l3 3" stroke-linecap="round"/>
-      </svg>
-      <input id="search-input" class="search-input-inline" type="search"
-        placeholder="Search messages…" autocomplete="off" autocorrect="off" spellcheck="false">
-      <button id="search-close-btn" class="search-close-inline" aria-label="Close search">✕</button>
-    </div>`;
-
-  const inp = header.querySelector('#search-input');
-  if (inp) { inp.addEventListener('input', onSearchInput); inp.focus(); }
-  header.querySelector('#search-close-btn')?.addEventListener('click', closeSearch);
-
-  let dropdown = $('search-dropdown');
-  if (!dropdown) {
-    dropdown = document.createElement('div');
-    dropdown.id = 'search-dropdown';
-    dropdown.className = 'search-dropdown hidden';
-    const sApp = $('s-app');
-    if (sApp) sApp.insertBefore(dropdown, sApp.children[1]);
-  }
-  dropdown.innerHTML = '<div class="search-empty" id="search-empty">Type to search your messages</div>';
-  dropdown.classList.remove('hidden');
-  pushBackEntry();
-}
-
-function closeSearch() {
-  const header = document.querySelector('.app-header');
-  if (header && header.dataset.searchMode) {
-    delete header.dataset.searchMode;
-    header.innerHTML = header._origHTML;
-    delete header._origHTML;
-    header.querySelector('#header-avatar')?.addEventListener('click', openAccountSwitcher);
-    header.querySelector('#header-settings-btn')?.addEventListener('click', openSettings);
-    header.querySelector('#header-search-btn')?.addEventListener('click', openSearch);
-  }
-  $('search-dropdown')?.classList.add('hidden');
-}
-
-function onSearchInput(e) {
-  clearTimeout(_searchDebounce);
-  const q = e.target.value.trim();
-  if (!q) { renderSearchResults([]); return; }
-  _searchDebounce = setTimeout(() => runSearch(q), 180);
-}
-
-async function runSearch(query) {
-  if (!S.encKey || !S.messages.length) return;
-  const q = query.toLowerCase();
-  const results = [];
-  for (const msg of S.messages) {
-    if (msg.deleted || msg.type === 'image' || msg.type === 'file') continue;
-    let text = msg._decryptedText;
-    if (!text && msg.ciphertext) {
-      try { text = await decrypt(S.encKey, msg.ciphertext, msg.iv); msg._decryptedText = text; }
-      catch { continue; }
-    }
-    if (!text) continue;
-    if (text.toLowerCase().includes(q)) results.push({ msg, text });
-  }
-  renderSearchResults(results, query);
-}
-
-function renderSearchResults(results, query = '') {
-  const el    = $('search-dropdown');
-  const empty = $('search-empty');
-  if (!el) return;
-
-  if (!results.length) {
-    if (empty) {
-      empty.textContent = query ? `No results for "${query}"` : 'Type to search your messages';
-      empty.classList.remove('hidden');
-    }
-    Array.from(el.children).forEach(c => { if (c !== empty) c.remove(); });
-    return;
-  }
-
-  if (empty) empty.classList.add('hidden');
-  Array.from(el.children).forEach(c => { if (c !== empty) c.remove(); });
-
-  const frag = document.createDocumentFragment();
-  for (const { msg, text } of results) {
-    const isOwn = msg.deviceId === S.deviceId;
-    const ts    = msg.timestamp ? new Date(msg.timestamp) : new Date();
-    const date  = ts.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
-    const time  = ts.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit', hour12: true });
-
-    const idx = text.toLowerCase().indexOf(query.toLowerCase());
-    let preview;
-    if (idx >= 0) {
-      const start  = Math.max(0, idx - 30);
-      const before = escHtml(text.slice(start, idx));
-      const match  = escHtml(text.slice(idx, idx + query.length));
-      const after  = escHtml(text.slice(idx + query.length, idx + query.length + 60));
-      preview = `${start > 0 ? '…' : ''}${before}<mark class="search-match">${match}</mark>${after}`;
-    } else {
-      preview = escHtml(text.slice(0, 100));
-    }
-
-    const row = document.createElement('div');
-    row.className = 'search-result-row';
-    row.innerHTML = `
-      <div class="sr-meta">
-        <span class="sr-name">${isOwn ? 'You' : escHtml(S.devices[msg.deviceId]?.name ?? msg.deviceName ?? 'Other device')}</span>
-        <span class="sr-date">${date} ${time}</span>
-      </div>
-      <div class="sr-text">${preview}</div>`;
-    row.addEventListener('click', () => { closeSearch(); window.Nexus.scrollToMsg(msg.id); });
-    frag.appendChild(row);
-  }
-  el.appendChild(frag);
-}
-
-// ============================================================
-// PHASE 5 — EXPORT
+// EXPORT CHAT
 // ============================================================
 async function exportChat(format) {
   if (!S.encKey || !S.messages.length) { toast('No messages to export'); return; }
@@ -3445,14 +2335,14 @@ async function exportChat(format) {
       const ts = msg.timestamp ? new Date(msg.timestamp) : new Date();
       let text = msg._decryptedText;
       if (!text && !msg.deleted) {
-        if (msg.type === 'image') text = `[Image: ${msg.fileName ?? 'photo'}]`;
-        else if (msg.type === 'file') text = `[File: ${msg.fileName ?? 'file'}]`;
+        if (msg.type === 'image') text = `[Image: ${msg.fileName ?? 'photo'}${msg.caption ? ` - ${msg.caption}` : ''}]`;
+        else if (msg.type === 'file') text = `[File: ${msg.fileName ?? 'file'}${msg.caption ? ` - ${msg.caption}` : ''}]`;
         else if (msg.ciphertext) {
           try { text = await decrypt(S.encKey, msg.ciphertext, msg.iv); }
           catch { text = '[Unable to decrypt]'; }
         }
       }
-      if (msg.deleted) continue; // skip deleted messages in export
+      if (msg.deleted) continue;
       decrypted.push({
         id:         msg.id,
         timestamp:  ts.toISOString(),
@@ -3460,6 +2350,7 @@ async function exportChat(format) {
         deviceId:   msg.deviceId,
         type:       msg.type ?? 'text',
         text:       text ?? '',
+        caption:    msg.caption ?? null,
         edited:     !!msg.edited,
         replyTo:    msg.replyTo ?? null,
         fileName:   msg.fileName ?? null,
@@ -3496,7 +2387,7 @@ async function exportChat(format) {
 }
 
 // ============================================================
-// PHASE 5 — PUSH NOTIFICATIONS
+// PUSH NOTIFICATIONS
 // ============================================================
 async function handlePushToggle() {
   const btn    = $('settings-push-btn');
@@ -3539,7 +2430,7 @@ async function handlePushToggle() {
     if (!vapidKey) {
       await settings.set(`push_enabled:${S.deviceKey}`, true);
       if (btn) btn.textContent = 'Disable';
-      if (status) status.textContent = 'Notifications enabled (browser alerts when Nexus is open). Add FCM VAPID key for background delivery.';
+      if (status) status.textContent = 'Notifications enabled. Add FCM VAPID key in Firebase for background push.';
       toast('Push notifications on');
       return;
     }
@@ -3559,7 +2450,7 @@ async function handlePushToggle() {
     });
     await settings.set(`push_enabled:${S.deviceKey}`, true);
     if (btn) btn.textContent = 'Disable';
-    if (status) status.textContent = 'Push notifications active — notified even when app is closed.';
+    if (status) status.textContent = 'Push notifications active.';
     toast('Push notifications on');
   } catch (err) {
     if (status) status.textContent = 'Error: ' + err.message;
@@ -3572,7 +2463,10 @@ async function handlePushToggle() {
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
   const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const binary  = atob(base64);
+  const bytes   = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function refreshPushUI() {
@@ -3599,7 +2493,7 @@ async function refreshPushUI() {
 }
 
 // ============================================================
-// PHASE 5 — MESSAGE ANIMATION STYLE
+// ANIMATION STYLE
 // ============================================================
 function applyAnimStyle(style) {
   const list = $('messages-list');
@@ -3614,107 +2508,6 @@ async function loadAndApplyAnimStyle(uid) {
   const sel = $('settings-anim-style');
   if (sel) sel.value = style;
 }
-
-// ============================================================
-// LINK PREVIEWS
-// ============================================================
-const _linkPreviewCache = new Map();
-
-async function fetchLinkPreview(url) {
-  if (_linkPreviewCache.has(url)) return _linkPreviewCache.get(url);
-  const enabled = await settings.get(`link_previews:${S.deviceKey}`);
-  if (enabled === false) { _linkPreviewCache.set(url, null); return null; }
-
-  try {
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const res   = await fetch(proxy, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error('proxy error');
-    const json  = await res.json();
-    const html  = json.contents ?? '';
-    const doc   = new DOMParser().parseFromString(html, 'text/html');
-    const meta  = (prop) => {
-      const el = doc.querySelector(`meta[property="${prop}"],meta[name="${prop}"]`);
-      return el?.getAttribute('content')?.trim() || null;
-    };
-    const title = meta('og:title') || meta('twitter:title') || doc.title?.trim() || null;
-    const desc  = meta('og:description') || meta('twitter:description') || meta('description') || null;
-    const image = meta('og:image') || meta('twitter:image') || null;
-    const host  = new URL(url).hostname.replace(/^www\./, '');
-    if (!title && !image) { _linkPreviewCache.set(url, null); return null; }
-    const preview = { title, desc, image, host, url };
-    _linkPreviewCache.set(url, preview);
-    return preview;
-  } catch {
-    _linkPreviewCache.set(url, null);
-    return null;
-  }
-}
-
-function buildLinkPreviewHTML(preview) {
-  if (!preview) return '';
-  // Strictly allow only http/https URLs — reject javascript:, data:, etc.
-  const rawUrl = preview.url ?? '';
-  if (!/^https?:\/\//i.test(rawUrl)) return '';
-  const rawImg = preview.image ?? '';
-  const safeImgSrc = /^https?:\/\//i.test(rawImg) ? escHtml(rawImg) : '';
-
-  const safeUrl   = escHtml(rawUrl);
-  const safeTitle = escHtml(preview.title ?? '');
-  const safeDesc  = escHtml((preview.desc ?? '').slice(0, 160));
-  const safeHost  = escHtml(preview.host ?? '');
-  const imgHtml   = safeImgSrc
-    ? `<img class="lp-image" src="${safeImgSrc}" alt="" loading="lazy" onerror="this.style.display='none'">`
-    : '';
-  return `<div class="link-preview" onclick="window.open('${escAttr(rawUrl)}','_blank','noopener')">
-    ${imgHtml}
-    <div class="lp-body">
-      ${safeTitle ? `<div class="lp-title">${safeTitle}</div>` : ''}
-      ${safeDesc  ? `<div class="lp-desc">${safeDesc}</div>`   : ''}
-      <div class="lp-host">${safeHost}</div>
-    </div>
-  </div>`;
-}
-
-function extractFirstUrl(text) {
-  const m = text?.match(/https?:\/\/[^\s<>"]+/);
-  return m ? m[0] : null;
-}
-
-async function injectLinkPreview(msgId, url) {
-  const preview = await fetchLinkPreview(url);
-  if (!preview) return;
-  // Use JS string matching instead of CSS.escape() — Firebase push keys
-  // start with '-' which CSS.escape may handle incorrectly in some browsers.
-  const list = $('messages-list');
-  const row = list
-    ? Array.from(list.querySelectorAll('.msg-row[data-id]'))
-        .find(r => r.dataset.id === msgId)
-    : null;
-  const bubble = row?.querySelector('.msg-bubble');
-  if (!bubble || bubble.querySelector('.link-preview')) return;
-  const meta = bubble.querySelector('.msg-meta');
-  if (meta) meta.insertAdjacentHTML('beforebegin', buildLinkPreviewHTML(preview));
-}
-
-// ============================================================
-// DRIVE CAP EDITING
-// ============================================================
-window.Nexus.editDriveCap = async function(driveUid, currentCap) {
-  const gbNow = (currentCap / (1024 ** 3)).toFixed(1);
-  const input = await nexusPrompt(`New storage cap in GB (current: ${gbNow} GB):`, gbNow);
-  if (input === null) return;
-  const gb = parseFloat(input);
-  if (isNaN(gb) || gb <= 0) { toast('Enter a valid number of GB'); return; }
-  try {
-    const { updateSpineCap } = await import('./spine.js');
-    await updateSpineCap(S.uid, driveUid, Math.round(gb * 1024 ** 3));
-    S.spineConfig = await getSpineConfig(S.uid);
-    toast(`Cap updated to ${gb} GB`);
-    renderStorageSummary();
-  } catch (err) {
-    toast('Error: ' + err.message);
-  }
-};
 
 // ============================================================
 // DEVICE MANAGEMENT
@@ -3733,27 +2526,19 @@ function renderDevicesList() {
       ? new Date(dev.lastSeen).toLocaleString(undefined, { dateStyle:'short', timeStyle:'short' })
       : 'Unknown';
 
-    // Browser: fall back to detectBrowser() style labels so old records
-    // that only have 'browser' stored still get a readable name.
     const rawBrowser = dev.browser ?? 'browser';
     const browserLabelStr = browserLabel(rawBrowser);
-
     const platformLabel = {
       android: 'Android', ios: 'iOS', windows: 'Windows PC',
       linux: 'Linux PC', mac: 'Mac', unknown: 'Unknown',
     }[dev.platform ?? 'unknown'] ?? 'Unknown';
 
-    // Main title = profile/device name; fallback to platform label
     const displayName = escHtml(dev.name ?? platformLabel);
-
-    // Avatar: use the decrypted per-device cache if available
     const devAvatar = _deviceAvatarCache.get(did);
     const avatarHtml = devAvatar
-      ? `<div class="dev-list-avatar"><img src="${devAvatar}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;"></div>`
+      ? `<div class="dev-list-avatar"><img src="${escAttr(devAvatar)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;"></div>`
       : `<div class="dev-list-avatar dev-list-avatar-letter">${avatarLetter(dev.name ?? '?')}</div>`;
 
-    // Email: stored in account object. S.email is only this device's email,
-    // but all devices under a UID share the same email address.
     const emailStr = escHtml(S.email ?? '');
 
     return `<div class="storage-row" style="align-items:flex-start;gap:12px">
@@ -3775,7 +2560,6 @@ function renderDevicesList() {
     </div>`;
   }).join('');
 
-  // Delegated handler (avoids inline onclick with arbitrary IDs)
   el.onclick = e => {
     const btn = e.target.closest('[data-remove-device]');
     if (btn) window.Nexus.removeLinkedDevice(btn.dataset.removeDevice);
@@ -3795,504 +2579,6 @@ window.Nexus.removeLinkedDevice = async function(deviceId) {
     toast('Error: ' + err.message);
   }
 };
-
-// ============================================================
-// CHANGE PASSPHRASE
-// ============================================================
-async function openChangePassphrase() {
-  const modal = document.createElement('div');
-  modal.className = 'migrate-modal';
-  modal.id = 'pcp-modal';
-  modal.innerHTML = `
-    <div class="migrate-panel">
-      <div class="migrate-title">Change Passphrase</div>
-      <div id="pcp-step1">
-        <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">
-          All messages will be re-encrypted with the new passphrase.
-        </p>
-        <div class="field-group" style="margin-bottom:16px">
-          <label class="field-label">Current Passphrase</label>
-          <input type="password" id="pcp-current" class="text-input" placeholder="Current passphrase" style="margin-bottom:0">
-        </div>
-        <div class="field-group" style="margin-bottom:16px">
-          <label class="field-label">New Passphrase</label>
-          <input type="password" id="pcp-new" class="text-input" placeholder="New passphrase (min 8 chars)" style="margin-bottom:0">
-        </div>
-        <div class="field-group" style="margin-bottom:20px">
-          <label class="field-label">Confirm New Passphrase</label>
-          <input type="password" id="pcp-confirm" class="text-input" placeholder="Confirm new passphrase" style="margin-bottom:0">
-        </div>
-        <div class="migrate-btn-row">
-          <button id="pcp-cancel" class="btn btn-ghost btn-sm">Cancel</button>
-          <button id="pcp-go" class="btn btn-sm" style="background:var(--accent);color:#fff">Change</button>
-        </div>
-      </div>
-      <div id="pcp-progress" class="hidden">
-        <div id="pcp-log" class="migrate-log" style="display:block;max-height:200px"></div>
-        <div class="migrate-btn-row" style="margin-top:12px">
-          <button id="pcp-close" class="btn btn-ghost btn-sm hidden">Close</button>
-        </div>
-      </div>
-    </div>`;
-
-  document.body.appendChild(modal);
-
-  const logEl    = modal.querySelector('#pcp-log');
-  const step1    = modal.querySelector('#pcp-step1');
-  const progress = modal.querySelector('#pcp-progress');
-  const logLine  = msg => { logEl.textContent += msg + '\n'; logEl.scrollTop = logEl.scrollHeight; };
-
-  modal.querySelector('#pcp-cancel').addEventListener('click', () => modal.remove());
-
-  modal.querySelector('#pcp-go').addEventListener('click', async () => {
-    const oldPass = modal.querySelector('#pcp-current').value;
-    const newPass = modal.querySelector('#pcp-new').value;
-    const confirm = modal.querySelector('#pcp-confirm').value;
-
-    if (!oldPass) { toast('Enter your current passphrase'); return; }
-    if (!newPass || newPass.length < 8) { toast('New passphrase must be at least 8 characters'); return; }
-    if (newPass !== confirm) { toast('Passphrases do not match'); return; }
-    if (oldPass === newPass) { toast('New passphrase must differ from current'); return; }
-
-    step1.classList.add('hidden');
-    progress.classList.remove('hidden');
-
-    let pcp_close_bound = false;
-    const bindClose = () => {
-      if (!pcp_close_bound) {
-        pcp_close_bound = true;
-        modal.querySelector('#pcp-close').classList.remove('hidden');
-        modal.querySelector('#pcp-close').addEventListener('click', () => modal.remove());
-      }
-    };
-
-    try {
-      logLine('Verifying current passphrase…');
-      const profile = await getProfile(S.uid);
-      if (!profile?.encryptionSalt) throw new Error('Profile not found in Firebase');
-      const oldKey = await deriveKey(oldPass, profile.encryptionSalt);
-      const vector = JSON.parse(profile.verificationVector);
-      if (!await verifyKey(oldKey, vector)) throw new Error('Current passphrase is incorrect');
-      logLine('Passphrase verified');
-
-      logLine('Deriving new encryption key…');
-      const newSalt   = generateSalt();
-      const newKey    = await deriveKey(newPass, newSalt);
-      const newVector = await createVerificationVector(newKey);
-      logLine('New key derived');
-
-      const msgs = S.messages.filter(m => !m.deleted && m.ciphertext);
-      logLine(`Re-encrypting ${msgs.length} messages…`);
-      const updates = {};
-      let msgDone = 0;
-      for (const msg of msgs) {
-        try {
-          const plaintext = await decrypt(oldKey, msg.ciphertext, msg.iv);
-          const { ciphertext: newC, iv: newIv } = await encrypt(newKey, plaintext);
-          updates[`accounts/${S.uid}/messages/${msg.id}/ciphertext`] = newC;
-          updates[`accounts/${S.uid}/messages/${msg.id}/iv`]         = newIv;
-          if (msg.encThumb?.ciphertext) {
-            const thumb = await decrypt(oldKey, msg.encThumb.ciphertext, msg.encThumb.iv);
-            const { ciphertext: tc, iv: ti } = await encrypt(newKey, thumb);
-            updates[`accounts/${S.uid}/messages/${msg.id}/encThumb/ciphertext`] = tc;
-            updates[`accounts/${S.uid}/messages/${msg.id}/encThumb/iv`]         = ti;
-          }
-          msgDone++;
-        } catch (e) { logLine(`  Could not re-encrypt ${msg.id}: ${e.message}`); }
-      }
-
-      logLine('Writing to Firebase…');
-      const { getDatabase: gdb, ref: dbRef, update: dbUpdate } =
-        await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js');
-      const fireDb = gdb(getFirebaseApp());
-      const updateEntries = Object.entries(updates);
-      for (let i = 0; i < updateEntries.length; i += 400) {
-        await dbUpdate(dbRef(fireDb, '/'), Object.fromEntries(updateEntries.slice(i, i + 400)));
-      }
-      logLine(`${msgDone} messages re-encrypted`);
-
-      logLine('Updating profile…');
-      await dbUpdate(dbRef(fireDb, `accounts/${S.uid}/profile`), {
-        encryptionSalt:     newSalt,
-        verificationVector: JSON.stringify(newVector),
-      });
-      logLine('Profile updated');
-
-      await keyStore.set(S.uid, newKey, newSalt, newVector);
-      S.encKey = newKey;
-      logLine('Local key updated');
-      logLine('\nPassphrase changed successfully!');
-      toast('Passphrase changed successfully');
-    } catch (err) {
-      logLine(`\nERROR: ${err.message}`);
-    } finally {
-      bindClose();
-    }
-  });
-}
-
-async function openSpineMigration() {
-  const config = await getSpineConfig(S.uid);
-  if (config.accounts.length < 2) { toast('You need at least 2 Drive accounts to migrate files.'); return; }
-
-  const modal = document.createElement('div');
-  modal.className = 'migrate-modal';
-
-  const accountOptions = config.accounts.map(a =>
-    `<option value="${escHtml(a.driveUid)}">${escHtml(a.email)}</option>`
-  ).join('');
-
-  modal.innerHTML = `
-    <div class="migrate-panel">
-      <div class="migrate-title">Migrate Files Between Drives</div>
-      <div class="migrate-row">
-        <label>From</label>
-        <select id="mg-from" class="settings-select">${accountOptions}</select>
-      </div>
-      <div class="migrate-row">
-        <label>To</label>
-        <select id="mg-to" class="settings-select">${accountOptions}</select>
-      </div>
-      <div class="settings-hint" style="margin-bottom:12px">
-        Moves all files from the source account to the destination. Source files are deleted after transfer.
-      </div>
-      <div id="mg-log" class="migrate-log"></div>
-      <div class="migrate-btn-row">
-        <button id="mg-cancel" class="btn btn-ghost btn-sm">Cancel</button>
-        <button id="mg-start"  class="btn btn-sm" style="background:var(--accent);color:#fff">Migrate</button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(modal);
-
-  const selFrom = modal.querySelector('#mg-from');
-  const selTo   = modal.querySelector('#mg-to');
-  if (config.accounts.length >= 2) {
-    selFrom.value = config.accounts[0].driveUid;
-    selTo.value   = config.accounts[1].driveUid;
-  }
-
-  modal.querySelector('#mg-cancel').addEventListener('click', () => modal.remove());
-
-  modal.querySelector('#mg-start').addEventListener('click', async () => {
-    const fromUid = selFrom.value;
-    const toUid   = selTo.value;
-    if (fromUid === toUid) { toast('Source and destination must be different'); return; }
-
-    const fromAcc = config.accounts.find(a => a.driveUid === fromUid);
-    const toAcc   = config.accounts.find(a => a.driveUid === toUid);
-    if (!fromAcc || !toAcc) { toast('Account not found'); return; }
-
-    const log = modal.querySelector('#mg-log');
-    log.style.display = 'block'; log.textContent = '';
-    const logLine = msg => { log.textContent += msg + '\n'; log.scrollTop = log.scrollHeight; };
-
-    const startBtn = modal.querySelector('#mg-start');
-    startBtn.disabled = true; startBtn.textContent = 'Migrating…';
-    modal.querySelector('#mg-cancel').disabled = true;
-
-    try {
-      const { getFullManifest } = await import('./spine.js');
-      if (!hasDriveToken(fromUid)) { logLine('ERROR: Source account needs re-authentication.'); return; }
-      if (!hasDriveToken(toUid))   { logLine('ERROR: Destination account needs re-authentication.'); return; }
-
-      logLine(`Starting: ${fromAcc.email} → ${toAcc.email}`);
-      const toFolderId = toAcc.folderId ?? await driveEnsureFolder(toUid, S.uid);
-      if (!toAcc.folderId) {
-        const freshCfg = await getSpineConfig(S.uid);
-        const liveAcc  = freshCfg.accounts.find(a => a.driveUid === toUid);
-        if (liveAcc && !liveAcc.folderId) { liveAcc.folderId = toFolderId; await saveSpineConfig(S.uid, freshCfg); }
-      }
-
-      const manifest = await getFullManifest(S.uid);
-      const entries  = Object.entries(manifest).filter(([, e]) => e.driveUid === fromUid && e.status !== 'missing');
-      logLine(`Found ${entries.length} file(s) to migrate.`);
-
-      let ok = 0, failed = 0;
-      for (const [uuid, entry] of entries) {
-        logLine(`  Copying ${uuid.slice(0, 8)}…`);
-        try {
-          const buf     = await driveDownloadFile(fromUid, entry.driveFileId);
-          const encBlob = new Blob([buf], { type: 'application/octet-stream' });
-          const newFileId = await driveUploadFile(toUid, toFolderId, uuid, encBlob, () => {});
-
-          const { update, ref: dbRef, getDatabase } =
-            await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js');
-          const db = getDatabase(getFirebaseApp());
-          await update(dbRef(db, `accounts/${S.uid}/mediaManifest/${uuid}`), {
-            driveUid: toUid, driveFileId: newFileId, folderId: toFolderId,
-          });
-          try { await driveDeleteFile(fromUid, entry.driveFileId); } catch {}
-          ok++;
-          logLine(`  OK ${uuid.slice(0, 8)}`);
-        } catch (err) { failed++; logLine(`  FAIL ${uuid.slice(0, 8)}: ${err.message}`); }
-      }
-
-      logLine(`\nDone. ${ok} migrated, ${failed} failed.`);
-      S.spineConfig = await getSpineConfig(S.uid);
-      renderStorageSummary();
-      startBtn.textContent = 'Done';
-    } catch (err) {
-      logLine(`\nFATAL: ${err.message}`);
-    } finally {
-      modal.querySelector('#mg-cancel').disabled = false;
-      modal.querySelector('#mg-cancel').textContent = 'Close';
-    }
-  });
-}
-
-// ============================================================
-// SLIDESHOW WALLPAPER EDITOR
-// ============================================================
-async function openSlideshowEditor(slides) {
-  const existingOpts = await loadSlideshowOpts(S.deviceKey);
-  const storedInterval = (await settings.get(`anim_slideshow_interval:${S.deviceKey}`)) ?? 30;
-
-  const modal = document.createElement('div');
-  modal.className = 'migrate-modal';
-  modal.id = 'slideshow-editor-modal';
-
-  const renderThumbs = (imgs) => imgs.map((src, i) => `
-    <div class="ss-thumb-item" data-index="${i}">
-      <img src="${src}" alt="Slide ${i+1}" class="ss-thumb-img">
-      <div class="ss-thumb-actions">
-        <button class="ss-thumb-btn ss-move-up"   data-index="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button class="ss-thumb-btn ss-move-down" data-index="${i}" ${i === imgs.length-1 ? 'disabled' : ''}>↓</button>
-        <button class="ss-thumb-btn ss-delete"    data-index="${i}" style="color:var(--danger)">✕</button>
-      </div>
-    </div>`).join('');
-
-  const isWD = existingOpts.transition === 'waterdrop';
-
-  modal.innerHTML = `
-    <div class="migrate-panel" style="max-width:500px">
-      <div class="migrate-title">Edit Slideshow</div>
-
-      <!-- Thumbnails -->
-      <div id="ss-thumb-grid" class="ss-thumb-grid">${renderThumbs(slides)}</div>
-      <button id="ss-add-btn" class="btn btn-ghost btn-sm" style="margin-top:8px">+ Add Images</button>
-
-      <!-- Transition settings -->
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:10px">
-        <div style="font-size:12px;color:var(--text-muted);font-weight:600;letter-spacing:.05em;text-transform:uppercase">Transition</div>
-
-        <div class="color-row" style="gap:10px">
-          <label style="font-size:13px;color:var(--text-dim);min-width:70px">Effect</label>
-          <select id="ss-transition" class="settings-select" style="flex:1">
-            <option value="crossfade" ${existingOpts.transition==='crossfade'?'selected':''}>Crossfade</option>
-            <option value="slide"     ${existingOpts.transition==='slide'    ?'selected':''}>Slide</option>
-            <option value="zoom"      ${existingOpts.transition==='zoom'     ?'selected':''}>Zoom in</option>
-            <option value="waterdrop" ${existingOpts.transition==='waterdrop'?'selected':''}>Waterdrop ✦</option>
-          </select>
-        </div>
-
-        <div class="color-row" style="gap:10px">
-          <label style="font-size:13px;color:var(--text-dim);min-width:70px">Speed</label>
-          <select id="ss-duration" class="settings-select" style="flex:1">
-            <option value="300"  ${existingOpts.duration===300  ?'selected':''}>Fast (0.3s)</option>
-            <option value="600"  ${existingOpts.duration===600  ?'selected':''}>Normal (0.6s)</option>
-            <option value="800"  ${!existingOpts.duration || existingOpts.duration===800?'selected':''}>Smooth (0.8s)</option>
-            <option value="1200" ${existingOpts.duration===1200 ?'selected':''}>Slow (1.2s)</option>
-            <option value="2000" ${existingOpts.duration===2000 ?'selected':''}>Very slow (2s)</option>
-          </select>
-        </div>
-
-        <div class="color-row" style="gap:10px">
-          <label style="font-size:13px;color:var(--text-dim);min-width:70px">Interval</label>
-          <select id="ss-interval" class="settings-select" style="flex:1">
-            <option value="5"   ${storedInterval==5  ?'selected':''}>5 sec</option>
-            <option value="15"  ${storedInterval==15 ?'selected':''}>15 sec</option>
-            <option value="30"  ${storedInterval==30 ?'selected':''}>30 sec</option>
-            <option value="60"  ${storedInterval==60 ?'selected':''}>1 min</option>
-            <option value="300" ${storedInterval==300?'selected':''}>5 min</option>
-          </select>
-        </div>
-
-        <!-- Waterdrop origin — only shown when waterdrop is selected -->
-        <div id="ss-waterdrop-section" class="${isWD ? '' : 'hidden'}" style="flex-direction:column;gap:8px">
-          <label style="font-size:13px;color:var(--text-dim)">Waterdrop origin — click to set</label>
-          <div id="ss-wd-picker"
-               style="width:100%;height:80px;background:var(--surface2);border:1.5px solid var(--border2);
-                      border-radius:var(--radius-sm);cursor:crosshair;position:relative;overflow:hidden">
-            <div id="ss-wd-dot"
-                 style="position:absolute;width:12px;height:12px;border-radius:50%;
-                        background:var(--accent);transform:translate(-50%,-50%);
-                        box-shadow:0 0 0 2px rgba(255,255,255,0.6);pointer-events:none;
-                        left:${existingOpts.waterdropX??50}%;top:${existingOpts.waterdropY??50}%"></div>
-          </div>
-          <div style="display:flex;gap:10px;align-items:center">
-            <label style="font-size:12px;color:var(--text-muted)">X</label>
-            <input type="range" id="ss-wd-x" min="0" max="100" value="${existingOpts.waterdropX??50}"
-                   style="flex:1;accent-color:var(--accent)">
-            <span id="ss-wd-x-val" style="font-size:12px;color:var(--text-dim);min-width:30px">${existingOpts.waterdropX??50}%</span>
-            <label style="font-size:12px;color:var(--text-muted)">Y</label>
-            <input type="range" id="ss-wd-y" min="0" max="100" value="${existingOpts.waterdropY??50}"
-                   style="flex:1;accent-color:var(--accent)">
-            <span id="ss-wd-y-val" style="font-size:12px;color:var(--text-dim);min-width:30px">${existingOpts.waterdropY??50}%</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="migrate-btn-row" style="margin-top:14px;flex-wrap:wrap;gap:8px">
-        <button id="ss-cancel-btn" class="btn btn-ghost btn-sm">Cancel</button>
-        <button id="ss-save-btn" class="btn btn-sm" style="background:var(--accent);color:#fff">Save</button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(modal);
-  let current = [...slides];
-
-  // Thumbnail grid interaction
-  const refresh = () => {
-    modal.querySelector('#ss-thumb-grid').innerHTML = renderThumbs(current);
-    modal.querySelectorAll('.ss-move-up').forEach(btn => btn.addEventListener('click', () => {
-      const i = +btn.dataset.index;
-      if (i > 0) { [current[i-1], current[i]] = [current[i], current[i-1]]; refresh(); }
-    }));
-    modal.querySelectorAll('.ss-move-down').forEach(btn => btn.addEventListener('click', () => {
-      const i = +btn.dataset.index;
-      if (i < current.length-1) { [current[i], current[i+1]] = [current[i+1], current[i]]; refresh(); }
-    }));
-    modal.querySelectorAll('.ss-delete').forEach(btn => btn.addEventListener('click', () => {
-      current.splice(+btn.dataset.index, 1); refresh();
-    }));
-  };
-  refresh();
-
-  modal.querySelector('#ss-add-btn').addEventListener('click', () => $('slideshow-file-input')?.click());
-
-  const addHandler = async (e) => {
-    const files = Array.from(e.target.files ?? []);
-    if (!files.length) return;
-    e.target.value = '';
-    toast('Processing…', 3000);
-    for (const f of files) { try { current.push(await compressWallpaper(f)); } catch {} }
-    refresh();
-  };
-  const orig = $('slideshow-file-input')._nexusAddHandler;
-  if (orig) $('slideshow-file-input').removeEventListener('change', orig);
-  $('slideshow-file-input')._nexusAddHandler = addHandler;
-  $('slideshow-file-input').addEventListener('change', addHandler);
-
-  // Transition selector — show/hide waterdrop section
-  const wdSection = modal.querySelector('#ss-waterdrop-section');
-  modal.querySelector('#ss-transition').addEventListener('change', e => {
-    const isWaterdrop = e.target.value === 'waterdrop';
-    if (wdSection) wdSection.classList.toggle('hidden', !isWaterdrop);
-  });
-
-  // Waterdrop sliders
-  const wdXSlider = modal.querySelector('#ss-wd-x');
-  const wdYSlider = modal.querySelector('#ss-wd-y');
-  const wdDot     = modal.querySelector('#ss-wd-dot');
-  const wdXVal    = modal.querySelector('#ss-wd-x-val');
-  const wdYVal    = modal.querySelector('#ss-wd-y-val');
-  const wdPicker  = modal.querySelector('#ss-wd-picker');
-
-  const updateWdDot = (x, y) => {
-    if (wdDot) { wdDot.style.left = `${x}%`; wdDot.style.top = `${y}%`; }
-    if (wdXVal) wdXVal.textContent = `${Math.round(x)}%`;
-    if (wdYVal) wdYVal.textContent = `${Math.round(y)}%`;
-  };
-  wdXSlider?.addEventListener('input', e => { updateWdDot(+e.target.value, +wdYSlider.value); });
-  wdYSlider?.addEventListener('input', e => { updateWdDot(+wdXSlider.value, +e.target.value); });
-  wdPicker?.addEventListener('click', e => {
-    const rect = wdPicker.getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width)  * 100);
-    const y = Math.round(((e.clientY - rect.top)  / rect.height) * 100);
-    if (wdXSlider) wdXSlider.value = String(x);
-    if (wdYSlider) wdYSlider.value = String(y);
-    updateWdDot(x, y);
-  });
-
-  modal.querySelector('#ss-cancel-btn').addEventListener('click', () => {
-    $('slideshow-file-input').removeEventListener('change', addHandler);
-    modal.remove();
-  });
-
-  modal.querySelector('#ss-save-btn').addEventListener('click', async () => {
-    if (!current.length) { toast('Add at least one image'); return; }
-    $('slideshow-file-input').removeEventListener('change', addHandler);
-    try {
-      const interval   = parseInt(modal.querySelector('#ss-interval')?.value ?? '30', 10);
-      const transition = modal.querySelector('#ss-transition')?.value ?? 'crossfade';
-      const duration   = parseInt(modal.querySelector('#ss-duration')?.value ?? '800', 10);
-      const wdX        = parseInt(wdXSlider?.value ?? '50', 10);
-      const wdY        = parseInt(wdYSlider?.value ?? '50', 10);
-      const opts       = { transition, duration, waterdropX: wdX, waterdropY: wdY };
-
-      await clearWallpaper(S.deviceKey);
-      await clearVideoWallpaper(S.deviceKey);
-      await saveSlideshowWallpaper(S.deviceKey, current);
-      await saveSlideshowOpts(S.deviceKey, opts);
-      await settings.set(`anim_slideshow_interval:${S.deviceKey}`, interval);
-      startSlideshowWallpaper(current, interval * 1000, opts);
-
-      // Sync settings panel controls
-      $('settings-wallpaper-preview')?.classList.add('hidden');
-      $('settings-wallpaper-remove')?.classList.remove('hidden');
-      $('slideshow-settings-block')?.classList.remove('hidden');
-      const sTran = $('settings-slideshow-transition');
-      if (sTran) sTran.value = transition;
-      const sDur = $('settings-slideshow-duration');
-      if (sDur) sDur.value = String(duration);
-      const sInt = $('settings-slideshow-interval');
-      if (sInt) sInt.value = String(interval);
-      $('slideshow-waterdrop-row')?.classList.toggle('hidden', transition !== 'waterdrop');
-      if (transition === 'waterdrop') {
-        const sx = $('settings-waterdrop-x'), sy = $('settings-waterdrop-y');
-        if (sx) { sx.value = String(wdX); $('waterdrop-x-val').textContent = `${wdX}%`; }
-        if (sy) { sy.value = String(wdY); $('waterdrop-y-val').textContent = `${wdY}%`; }
-        _updateWaterdropDot(wdX, wdY);
-      }
-
-      toast(`Slideshow saved — ${current.length} image${current.length > 1 ? 's' : ''}`);
-    } catch (err) { toast('Save failed: ' + err.message); }
-    modal.remove();
-  });
-}
-
-// ============================================================
-// VIDEO WALLPAPER EDITOR
-// ============================================================
-function openVideoEditor() {
-  const modal = document.createElement('div');
-  modal.className = 'migrate-modal';
-  modal.innerHTML = `
-    <div class="migrate-panel" style="max-width:380px">
-      <div class="migrate-title">Video Wallpaper</div>
-      <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">
-        A video is already set. You can replace or remove it.
-      </p>
-      <div class="migrate-btn-row" style="flex-wrap:wrap;gap:8px">
-        <button id="vw-replace-btn" class="btn btn-ghost btn-sm">Replace Video</button>
-        <button id="vw-remove-btn"  class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:var(--danger)">Remove</button>
-        <button id="vw-cancel-btn"  class="btn btn-ghost btn-sm">Cancel</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  modal.querySelector('#vw-replace-btn').addEventListener('click', () => { modal.remove(); $('video-wall-file-input')?.click(); });
-  modal.querySelector('#vw-remove-btn').addEventListener('click', async () => {
-    await clearVideoWallpaper(S.deviceKey);
-    removeVideoWallpaper();
-    $('settings-wallpaper-remove')?.classList.add('hidden');
-    toast('Video wallpaper removed');
-    modal.remove();
-  });
-  modal.querySelector('#vw-cancel-btn').addEventListener('click', () => modal.remove());
-}
-
-function avatarLetter(emailOrName) {
-  return (emailOrName?.[0] ?? '?').toUpperCase();
-}
-
-// Sync the visual dot on the origin picker in the settings panel.
-// Called from openSettings, openSlideshowEditor, and bindEvents handlers.
-function _updateWaterdropDot(x, y) {
-  const dot = $('waterdrop-origin-dot');
-  if (dot) { dot.style.left = `${x}%`; dot.style.top = `${y}%`; }
-}
 
 // ============================================================
 // EVENT BINDING
@@ -4356,126 +2642,260 @@ function bindEvents() {
   $('lock-pin-input')?.addEventListener('input', onLockPINInput);
   $('lock-pin-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter' && _pinBuffer.length > 0) submitPIN();
-    // Samsung keyboard sometimes fires keydown for Backspace but not an input
-    // event on a 1×1 hidden input. Handle it explicitly.
     if (e.key === 'Backspace') {
       onPINBackspace();
-      // Also truncate the input value to stay in sync
       const inp = $('lock-pin-input');
       if (inp) inp.value = _pinBuffer;
     }
   });
   $('lock-bio-btn')?.addEventListener('click', attemptBiometricUnlock);
 
-  // Passphrase fallback — shown after 5 failed PIN attempts.
-  // Clears the lockout state and takes the user to passphrase entry so they
-  // can get back in without needing to remember the PIN.
   $('lock-use-passphrase-btn')?.addEventListener('click', async () => {
     const uid = S.uid ?? (await getCurrentAccount())?.uid;
     if (uid) {
       try {
-        // Clear the persisted lockout so the next successful passphrase login
-        // isn't immediately followed by a locked-out lock screen.
         const ld = await lockStore.get(uid);
         if (ld) await lockStore.set(uid, { ...ld, failedAttempts: 0, lockedUntil: 0 });
       } catch {}
     }
-    _pinAttempts    = 0;
-    _pinLockedUntil = 0;
+    clearPINDisplay();
     showScreen('s-passphrase-entry');
   });
 
-  $('attach-btn')?.addEventListener('click', () => $('file-input')?.click());
-  $('file-input')?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    // Route image/video/audio through the preview dialog so the user can
-    // add a caption and confirm before sending.  Other files (PDF, zip, etc.)
-    // go straight to upload since there's nothing meaningful to preview.
-    const isPreviewable = file.type.startsWith('image/') ||
-                          file.type.startsWith('video/') ||
-                          file.type.startsWith('audio/');
-    if (isPreviewable) showMediaPreview(file);
-    else               await handleMediaSend(file);
-  });
-
-  $('send-btn')?.addEventListener('click', handleSend);
-  $('msg-input')?.addEventListener('keydown', e => {
-    // On desktop: Enter sends, Shift+Enter inserts newline.
-    // On mobile:  the keyboard's action key (labelled "Send" via enterkeyhint)
-    //             fires Enter — honour it the same way.
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault(); handleSend();
-    }
-  });
-  $('msg-input')?.addEventListener('input', onInputChange);
-
-  // Image paste from clipboard
-  document.addEventListener('paste', async e => {
-    if (S.currentScreen !== 's-app') return;
-    const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItem = items.find(item => item.type.startsWith('image/'));
-    if (!imageItem) return;
-    if (!S.spineConfig?.accounts?.length) { toast('No Drive accounts linked. Add one in Settings → Storage.'); return; }
-    const file = imageItem.getAsFile();
-    if (!file) return;
-    e.preventDefault();
-    // Route through preview dialog so the user can confirm and add a caption.
-    showMediaPreview(file);
-  });
-
+  // App Header
   $('header-avatar')?.addEventListener('click', openAccountSwitcher);
   $('header-settings-btn')?.addEventListener('click', openSettings);
-  $('header-search-btn')?.addEventListener('click', openSearch);
+  $('header-search-btn')?.addEventListener('click', () => openSearch(S, window.Nexus.scrollToMsg));
 
-  // Note: search UI is inline (header-replacement) — no separate overlay bindings needed.
-
-  $('account-overlay-close')?.addEventListener('click', () => hide('overlay-accounts'));
-  $('add-account-btn')?.addEventListener('click', async () => {
-    hide('overlay-accounts'); showScreen('s-signin');
-  });
-
-  $('settings-close-btn')?.addEventListener('click', () => hide('overlay-settings'));
-  $('settings-device-name')?.addEventListener('change', async e => {
-    const name = e.target.value.trim();
-    if (name) {
-      S.deviceName = name;
-      await updateDeviceName(name);
-      $('header-title').textContent = name;
-      // Update the Firebase device record so the name is immediately reflected
-      // in Linked Devices on all other sessions, and in msg.deviceName on new messages.
-      try { await touchDevice(S.uid, S.deviceId, { name }); } catch {}
-      try { await setupPresence(S.uid, S.deviceId, name); } catch {}
-      // Refresh all avatar/name displays (header, settings preview, lock screen
-      // name + initial, and message avatar initials) in one call.
-      updateAvatarDisplay();
-      toast('Username updated');
+  // Chat input
+  $('send-btn')?.addEventListener('click', handleSend);
+  $('msg-input')?.addEventListener('input', onInputChange);
+  $('msg-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
   });
-  $('settings-device-name')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+
+  // Attachments
+  $('attach-btn')?.addEventListener('click', () => $('media-file-input')?.click());
+  $('media-file-input')?.addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (file) showMediaPreview(file, S, handleMediaSend);
+    e.target.value = '';
   });
-  $('settings-signout-btn')?.addEventListener('click', async () => {
-    hide('overlay-settings');
-    clearUnsubscribers();
-    await signOut();
-    showScreen('s-signin');
+  $('upload-cancel-btn')?.addEventListener('click', cancelCurrentUpload);
+
+  // Settings Panel events
+  $('settings-close-btn')?.addEventListener('click', () => hide('overlay-settings'));
+  $('overlay-settings')?.addEventListener('click', e => {
+    if (e.target === $('overlay-settings')) hide('overlay-settings');
   });
 
-  $('export-json-btn')?.addEventListener('click', () => exportChat('json'));
-  $('export-txt-btn')?.addEventListener('click',  () => exportChat('text'));
+  $('accounts-close-btn')?.addEventListener('click', () => hide('overlay-accounts'));
+  $('overlay-accounts')?.addEventListener('click', e => {
+    if (e.target === $('overlay-accounts')) hide('overlay-accounts');
+  });
+
+  $('settings-accent-color')?.addEventListener('input', e => applyAccentColor(e.target.value));
+  $('settings-accent-color')?.addEventListener('change', async e => {
+    await saveAccentColor(S.deviceKey, e.target.value);
+    toast('Accent colour saved');
+  });
+  $('settings-accent-reset')?.addEventListener('click', async () => {
+    await clearAccentColor(S.deviceKey);
+    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+    applyTheme(thId);
+    $('settings-accent-color').value = THEMES[thId]?.vars['--accent'] ?? '#8b5cf6';
+    toast('Accent colour reset');
+  });
+
+  $('settings-own-bubble-color')?.addEventListener('input', e => applyOwnBubbleColor(e.target.value));
+  $('settings-own-bubble-color')?.addEventListener('change', async e => {
+    await saveOwnBubbleColor(S.deviceKey, e.target.value);
+    toast('Sent bubble colour saved');
+  });
+  $('settings-own-bubble-reset')?.addEventListener('click', async () => {
+    await clearOwnBubbleColor(S.deviceKey);
+    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+    applyTheme(thId);
+    $('settings-own-bubble-color').value = THEMES[thId]?.vars['--own-bg'] ?? '#6d44d4';
+    toast('Sent bubble colour reset');
+  });
+
+  $('settings-other-bubble-color')?.addEventListener('input', e => applyOtherBubbleColor(e.target.value));
+  $('settings-other-bubble-color')?.addEventListener('change', async e => {
+    await saveOtherBubbleColor(S.deviceKey, e.target.value);
+    toast('Received bubble colour saved');
+  });
+  $('settings-other-bubble-reset')?.addEventListener('click', async () => {
+    await clearOtherBubbleColor(S.deviceKey);
+    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
+    applyTheme(thId);
+    $('settings-other-bubble-color').value = THEMES[thId]?.vars['--other-bg'] ?? '#141422';
+    toast('Received bubble colour reset');
+  });
+
+  // Wallpaper triggers
+  $('settings-wallpaper-btn')?.addEventListener('click', async () => {
+    const cur = await settings.get(`appearance:wallpaper:${S.deviceKey}`);
+    if (cur) {
+      if (await nexusConfirm('A single image wallpaper is already set. Replace it?', { confirmLabel: 'Replace' })) {
+        $('wallpaper-file-input')?.click();
+      }
+    } else {
+      $('wallpaper-file-input')?.click();
+    }
+  });
+
+  $('wallpaper-file-input')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const cropped = await cropImage(file, 'rect');
+      const dataUrl = cropped;
+      applyWallpaper(dataUrl);
+      await saveWallpaper(S.deviceKey, dataUrl);
+      $('settings-wallpaper-preview').src = dataUrl;
+      $('settings-wallpaper-preview').classList.remove('hidden');
+      $('settings-wallpaper-remove').classList.remove('hidden');
+      toast('Wallpaper saved');
+    } catch (err) {
+      if (err.message !== 'cancelled') toast('Wallpaper failed: ' + err.message);
+    }
+    e.target.value = '';
+  });
+
+  $('settings-slideshow-btn')?.addEventListener('click', async () => {
+    const slides = await loadSlideshowWallpaper(S.deviceKey);
+    if (slides.length > 0) {
+      openSlideshowEditor(slides, S, async (updatedSlides, interval, opts) => {
+        await saveSlideshowWallpaper(S.deviceKey, updatedSlides);
+        startSlideshowWallpaper(updatedSlides, interval * 1000, opts);
+        $('settings-wallpaper-remove')?.classList.remove('hidden');
+      });
+    } else {
+      $('slideshow-file-input')?.click();
+    }
+  });
+
+  $('slideshow-file-input')?.addEventListener('change', async e => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    try {
+      const dataUrls = [];
+      for (const f of files) dataUrls.push(await compressWallpaper(f));
+      const existing = await loadSlideshowWallpaper(S.deviceKey);
+      const combined = [...existing, ...dataUrls];
+      await saveSlideshowWallpaper(S.deviceKey, combined);
+      const storedInterval = (await settings.get(`anim_slideshow_interval:${S.deviceKey}`)) ?? 30;
+      const opts = await loadSlideshowOpts(S.deviceKey);
+      startSlideshowWallpaper(combined, storedInterval * 1000, opts);
+      $('settings-wallpaper-remove')?.classList.remove('hidden');
+      $('slideshow-settings-block')?.classList.remove('hidden');
+      toast(`Slideshow updated (${combined.length} images)`);
+    } catch (err) {
+      toast('Slideshow failed: ' + err.message);
+    }
+    e.target.value = '';
+  });
+
+  $('settings-video-wall-btn')?.addEventListener('click', async () => {
+    const cur = await loadVideoWallpaper(S.deviceKey);
+    if (cur) {
+      openVideoEditor(S, () => {
+        $('settings-wallpaper-preview')?.classList.add('hidden');
+      });
+    } else {
+      $('video-wall-file-input')?.click();
+    }
+  });
+
+  $('video-wall-file-input')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const dataUrl = reader.result;
+        applyVideoWallpaper(dataUrl);
+        await saveVideoWallpaper(S.deviceKey, dataUrl);
+        $('settings-wallpaper-remove')?.classList.remove('hidden');
+        $('settings-wallpaper-preview')?.classList.add('hidden');
+        toast('Video wallpaper set');
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      toast('Video wallpaper failed: ' + err.message);
+    }
+    e.target.value = '';
+  });
+
+  $('settings-wallpaper-remove')?.addEventListener('click', async () => {
+    await clearWallpaper(S.deviceKey);
+    await clearSlideshowWallpaper(S.deviceKey);
+    await clearVideoWallpaper(S.deviceKey);
+    applyWallpaper(null);
+    stopSlideshowWallpaper();
+    removeVideoWallpaper();
+    $('settings-wallpaper-preview')?.classList.add('hidden');
+    $('settings-wallpaper-remove')?.classList.add('hidden');
+    $('slideshow-settings-block')?.classList.add('hidden');
+    toast('Wallpaper removed');
+  });
+
+  $('settings-device-name')?.addEventListener('change', async e => {
+    const val = e.target.value.trim();
+    if (!val) return;
+    await updateDeviceName(val);
+    S.deviceName = val;
+    $('header-title').textContent = val;
+    toast('Device name saved');
+  });
+
+  $('settings-autolock')?.addEventListener('change', async e => {
+    const mins = parseInt(e.target.value, 10);
+    await setAutoLockMinutes(S.uid, mins);
+    toast(`Auto-lock set to ${mins === 0 ? 'Never' : mins + ' min'}`);
+  });
+
+  $('settings-avatar-btn')?.addEventListener('click', () => $('avatar-file-input')?.click());
+  $('avatar-file-input')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const cropped = await cropImage(file, 'circle');
+      const dataUrl = cropped;
+      const { ciphertext, iv } = await encrypt(S.encKey, dataUrl);
+      await updateDeviceAvatar(S.uid, S.deviceId, JSON.stringify({ ciphertext, iv }));
+      S.avatarDataUrl = dataUrl;
+      _deviceAvatarCache.set(S.deviceId, dataUrl);
+      updateAvatarDisplay();
+      toast('Profile photo updated');
+    } catch (err) {
+      if (err.message !== 'cancelled') toast('Avatar failed: ' + err.message);
+    }
+    e.target.value = '';
+  });
+
+  $('settings-avatar-remove-btn')?.addEventListener('click', async () => {
+    await updateDeviceAvatar(S.uid, S.deviceId, null);
+    S.avatarDataUrl = null;
+    _deviceAvatarCache.delete(S.deviceId);
+    updateAvatarDisplay();
+    toast('Profile photo removed');
+  });
+
   $('settings-push-btn')?.addEventListener('click', handlePushToggle);
 
   $('settings-anim-style')?.addEventListener('change', async e => {
     const style = e.target.value;
     await settings.set(`anim_style:${S.deviceKey}`, style);
-    
     applyAnimStyle(style);
     toast('Animation style updated');
   });
 
-  $('settings-font-size')?.addEventListener('input', async e => {
+  $('settings-font-size')?.addEventListener('input', e => {
     const px = Math.min(24, Math.max(10, parseInt(e.target.value, 10) || 14));
     applyFontSize(px);
   });
@@ -4484,18 +2904,12 @@ function bindEvents() {
     e.target.value = String(px);
     applyFontSize(px);
     await settings.set(`font_size:${S.deviceKey}`, px);
-    
     toast('Font size updated');
   });
 
   $('settings-change-passphrase-btn')?.addEventListener('click', () => {
-    hide('overlay-settings'); openChangePassphrase();
-  });
-
-  $('settings-bio-setup-btn')?.addEventListener('click', async () => {
-    const account = await getCurrentAccount();
-    try { await setupBiometrics(S.uid, account?.email ?? ''); toast('Biometrics enabled'); }
-    catch { toast('Biometrics setup failed'); }
+    hide('overlay-settings');
+    openChangePassphrase(S, newKey => { S.encKey = newKey; });
   });
 
   $('settings-add-drive-btn')?.addEventListener('click', async () => {
@@ -4504,489 +2918,108 @@ function bindEvents() {
         await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/drive.file');
+      provider.setCustomParameters({ prompt: 'select_account' });
+
       const auth = getAuth();
       const originalUser = auth.currentUser;
       const result = await signInWithPopup(auth, provider);
       const cred   = GoogleAuthProvider.credentialFromResult(result);
-      const driveUid = result.user.uid;
-      const email    = result.user.email;
 
       if (result.user.uid !== S.uid && originalUser) {
         try { await auth.updateCurrentUser(originalUser); } catch {}
       }
 
-      if (cred?.accessToken) storeDriveToken(driveUid, cred.accessToken, 3600);
-
-      const gbInput = await nexusPrompt('How many GB should Nexus use on this Drive account?', '15');
-      if (gbInput === null) return;
-      const gb = parseFloat(gbInput);
-      const capBytes = (isNaN(gb) || gb <= 0) ? 5 * 1024 * 1024 * 1024 : Math.round(gb * 1024 ** 3);
-      await addSpineAccount(S.uid, driveUid, email, capBytes);
-      S.spineConfig = await getSpineConfig(S.uid);
-      toast('Drive account added to Spine');
-      renderStorageSummary();
+      if (cred?.accessToken) {
+        const driveUid = result.user.uid;
+        storeDriveToken(driveUid, cred.accessToken, 3600);
+        await addSpineAccount(S.uid, driveUid, result.user.email, 5 * 1024 ** 3);
+        S.spineConfig = await getSpineConfig(S.uid);
+        toast(`Added Drive account: ${result.user.email}`);
+        renderStorageSummary();
+      }
     } catch (err) {
-      if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') return;
-      toast('Error: ' + err.message);
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+      toast('Failed to add Drive account: ' + err.message);
     }
   });
 
-  $('settings-autolock')?.addEventListener('change', async e => {
-    const mins = parseInt(e.target.value, 10);
-    await setAutoLockMinutes(S.uid, mins);
-    startAutoLockTimer();
-    toast('Auto-lock updated');
+  $('settings-migrate-btn')?.addEventListener('click', () => {
+    openSpineMigration(S, updatedConfig => {
+      S.spineConfig = updatedConfig;
+      renderStorageSummary();
+    });
   });
 
-  // install-btn removed
+  $('export-json-btn')?.addEventListener('click', () => exportChat('json'));
+  $('export-txt-btn')?.addEventListener('click',  () => exportChat('txt'));
 
-  document.addEventListener('nexus:screenchange', async e => {
-    if (e.detail === 's-biometrics-setup') initBiometricsScreen();
-    if (e.detail === 's-pin-setup')        initPINSetupScreen();
-  });
-  initBiometricsScreen();
-
-  const devInput = $('device-name-input');
-  if (devInput && !devInput.value) devInput.value = getDefaultDeviceName();
-
-  $('overlay-settings')?.addEventListener('click', e => {
-    if (e.target === $('overlay-settings')) hide('overlay-settings');
-  });
-  $('overlay-accounts')?.addEventListener('click', e => {
-    if (e.target === $('overlay-accounts')) hide('overlay-accounts');
+  $('settings-signout-btn')?.addEventListener('click', async () => {
+    if (!await nexusConfirm('Sign out of this account? Your messages remain securely encrypted in Firebase.', { confirmLabel: 'Sign Out', danger: true })) return;
+    clearUnsubscribers();
+    await signOut();
+    location.reload();
   });
 
-  $('upload-cancel-btn')?.addEventListener('click', cancelCurrentUpload);
-
-  $('settings-avatar-btn')?.addEventListener('click', () => $('avatar-file-input')?.click());
-  $('avatar-file-input')?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    try {
-      let croppedDataUrl;
-      try {
-        croppedDataUrl = await cropImage(file, 'circle');
-      } catch (cropErr) {
-        if (cropErr.message === 'cancelled') return;
-        croppedDataUrl = await compressAvatar(file);
-      }
-      const { ciphertext, iv } = await encrypt(S.encKey, croppedDataUrl);
-      // Store avatar on the device record — not the shared profile — so each
-      // (email × device × browser) combination has its own independent photo.
-      await updateDeviceAvatar(S.uid, S.deviceId, JSON.stringify({ ciphertext, iv }));
-      S.avatarDataUrl = croppedDataUrl;
-      _deviceAvatarCache.set(S.deviceId, croppedDataUrl);
-      updateAvatarDisplay();
-      toast('Profile photo updated');
-    } catch (err) { toast('Could not set photo: ' + err.message); }
-  });
-
-  $('settings-avatar-remove-btn')?.addEventListener('click', async () => {
-    try {
-      await updateDeviceAvatar(S.uid, S.deviceId, null);
-      S.avatarDataUrl = null;
-      _deviceAvatarCache.delete(S.deviceId);
-      updateAvatarDisplay();
-      toast('Profile photo removed');
-    } catch (err) { toast('Error: ' + err.message); }
-  });
-
-  let _accentSaveTimer = null;
-  $('settings-accent-color')?.addEventListener('input', async e => {
-    const hex = e.target.value;
-    applyAccentColor(hex);
-    await saveAccentColor(S.deviceKey, hex);
-    clearTimeout(_accentSaveTimer);
-    _accentSaveTimer = null;
-  });
-  $('settings-accent-reset')?.addEventListener('click', async () => {
-    await clearAccentColor(S.deviceKey);
-    
-    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
-    applyTheme(thId);
-    const { ownBubble } = await loadAppearance(S.deviceKey);
-    if (ownBubble) applyOwnBubbleColor(ownBubble);
-    const picker = $('settings-accent-color');
-    if (picker) picker.value = THEMES[thId]?.vars['--accent'] ?? '#8b5cf6';
-    toast('Accent colour reset');
-  });
-
-  let _ownBubbleSaveTimer = null;
-  $('settings-own-bubble-color')?.addEventListener('input', async e => {
-    const hex = e.target.value;
-    applyOwnBubbleColor(hex);
-    await saveOwnBubbleColor(S.deviceKey, hex);
-    clearTimeout(_ownBubbleSaveTimer);
-    _ownBubbleSaveTimer = null;
-  });
-  $('settings-own-bubble-reset')?.addEventListener('click', async () => {
-    await clearOwnBubbleColor(S.deviceKey);
-    
-    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
-    const def  = THEMES[thId]?.vars['--own-bg'] ?? '#6d44d4';
-    applyOwnBubbleColor(def);
-    const picker = $('settings-own-bubble-color');
-    if (picker) picker.value = def;
-    toast('Bubble colour reset');
-  });
-
-  let _otherBubbleSaveTimer = null;
-  $('settings-other-bubble-color')?.addEventListener('input', async e => {
-    applyOtherBubbleColor(e.target.value);
-    await saveOtherBubbleColor(S.deviceKey, e.target.value);
-    clearTimeout(_otherBubbleSaveTimer);
-    _otherBubbleSaveTimer = null;
-  });
-  $('settings-other-bubble-reset')?.addEventListener('click', async () => {
-    await clearOtherBubbleColor(S.deviceKey);
-    
-    const thId = document.documentElement.getAttribute('data-theme') ?? 'deep-dark';
-    const def  = THEMES[thId]?.vars['--other-bg'] ?? '#141422';
-    applyOtherBubbleColor(def);
-    // Also remove the avatar-initial override so initials fall back to the
-    // accent gradient (default behaviour when no custom other-bubble is set).
-    document.documentElement.style.removeProperty('--avatar-initial-bg');
-    const picker = $('settings-other-bubble-color');
-    if (picker) picker.value = def;
-    toast('Received bubble colour reset');
-  });
-
-  $('settings-wallpaper-btn')?.addEventListener('click', () => $('wallpaper-file-input')?.click());
-  $('wallpaper-file-input')?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    try {
-      toast('Processing…', 5000);
-      let dataUrl;
-      try {
-        const cropped = await cropImage(file, 'rect');
-        const res = await fetch(cropped); const blob = await res.blob();
-        dataUrl = await compressWallpaper(new File([blob], 'wall.jpg', { type: 'image/jpeg' }));
-      } catch (cropErr) {
-        if (cropErr.message === 'cancelled') return;
-        dataUrl = await compressWallpaper(file);
-      }
-      await clearVideoWallpaper(S.deviceKey);
-      await clearSlideshowWallpaper(S.deviceKey);
-      await clearSlideshowOpts(S.deviceKey);
-      await saveWallpaper(S.deviceKey, dataUrl);
-      applyWallpaper(dataUrl);
-      const prev = $('settings-wallpaper-preview');
-      if (prev) { prev.src = dataUrl; prev.classList.remove('hidden'); }
-      $('settings-wallpaper-remove')?.classList.remove('hidden');
-      $('slideshow-settings-block')?.classList.add('hidden');
-      toast('Wallpaper set');
-    } catch (err) { toast('Could not set wallpaper: ' + err.message); }
-  });
-
-  $('settings-slideshow-btn')?.addEventListener('click', async () => {
-    const existing = await loadSlideshowWallpaper(S.deviceKey);
-    if (existing.length > 0) openSlideshowEditor(existing);
-    else $('slideshow-file-input')?.click();
-  });
-  $('slideshow-file-input')?.addEventListener('change', async e => {
-    const files = Array.from(e.target.files ?? []);
-    if (!files.length) return;
-    e.target.value = '';
-    try {
-      toast('Processing…', 5000);
-      const dataUrls = [];
-      for (const f of files) { try { dataUrls.push(await compressWallpaper(f)); } catch {} }
-      if (!dataUrls.length) { toast('No valid images'); return; }
-      const existing = await loadSlideshowWallpaper(S.deviceKey);
-      const merged   = [...existing, ...dataUrls];
-      await clearWallpaper(S.deviceKey);
-      await clearVideoWallpaper(S.deviceKey);
-      await saveSlideshowWallpaper(S.deviceKey, merged);
-      const interval = parseInt($('settings-slideshow-interval')?.value ?? '30', 10);
-      await settings.set(`anim_slideshow_interval:${S.deviceKey}`, interval);
-      const opts = await loadSlideshowOpts(S.deviceKey);
-      startSlideshowWallpaper(merged, interval * 1000, opts);
-      $('settings-wallpaper-preview')?.classList.add('hidden');
-      $('settings-wallpaper-remove')?.classList.remove('hidden');
-      $('slideshow-settings-block')?.classList.remove('hidden');
-      toast(`Slideshow updated — ${merged.length} image${merged.length > 1 ? 's' : ''}`);
-    } catch (err) { toast('Could not set slideshow: ' + err.message); }
-  });
-  $('settings-slideshow-interval')?.addEventListener('change', async e => {
-    const interval = parseInt(e.target.value, 10);
-    await settings.set(`anim_slideshow_interval:${S.deviceKey}`, interval);
-    const slides = await loadSlideshowWallpaper(S.deviceKey);
-    if (slides.length) {
-      const opts = await loadSlideshowOpts(S.deviceKey);
-      startSlideshowWallpaper(slides, interval * 1000, opts);
-    }
-    toast('Slideshow interval updated');
-  });
-
-  // Shared helper: save opts and restart slideshow with current opts from settings panel
-  async function _saveAndRestartSlideshow() {
-    const slides = await loadSlideshowWallpaper(S.deviceKey);
-    if (!slides.length) return;
-    const transition = $('settings-slideshow-transition')?.value ?? 'crossfade';
-    const duration   = parseInt($('settings-slideshow-duration')?.value ?? '800', 10);
-    const wdX        = parseInt($('settings-waterdrop-x')?.value ?? '50', 10);
-    const wdY        = parseInt($('settings-waterdrop-y')?.value ?? '50', 10);
-    const interval   = parseInt($('settings-slideshow-interval')?.value ?? '30', 10);
-    const opts       = { transition, duration, waterdropX: wdX, waterdropY: wdY };
-    await saveSlideshowOpts(S.deviceKey, opts);
-    startSlideshowWallpaper(slides, interval * 1000, opts);
-  }
-
-  $('settings-slideshow-transition')?.addEventListener('change', async e => {
-    const isWaterdrop = e.target.value === 'waterdrop';
-    $('slideshow-waterdrop-row')?.classList.toggle('hidden', !isWaterdrop);
-    await _saveAndRestartSlideshow();
-    toast('Transition updated');
-  });
-
-  $('settings-slideshow-duration')?.addEventListener('change', async () => {
-    await _saveAndRestartSlideshow();
-    toast('Transition speed updated');
-  });
-
-  $('settings-waterdrop-x')?.addEventListener('input', async e => {
-    const x = +e.target.value;
-    const y = +($('settings-waterdrop-y')?.value ?? 50);
-    if ($('waterdrop-x-val')) $('waterdrop-x-val').textContent = `${x}%`;
-    _updateWaterdropDot(x, y);
-  });
-  $('settings-waterdrop-x')?.addEventListener('change', async () => { await _saveAndRestartSlideshow(); });
-
-  $('settings-waterdrop-y')?.addEventListener('input', async e => {
-    const y = +e.target.value;
-    const x = +($('settings-waterdrop-x')?.value ?? 50);
-    if ($('waterdrop-y-val')) $('waterdrop-y-val').textContent = `${y}%`;
-    _updateWaterdropDot(x, y);
-  });
-  $('settings-waterdrop-y')?.addEventListener('change', async () => { await _saveAndRestartSlideshow(); });
-
-  $('waterdrop-origin-picker')?.addEventListener('click', async e => {
-    const rect = $('waterdrop-origin-picker').getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width)  * 100);
-    const y = Math.round(((e.clientY - rect.top)  / rect.height) * 100);
-    const sx = $('settings-waterdrop-x'), sy = $('settings-waterdrop-y');
-    if (sx) { sx.value = String(x); if ($('waterdrop-x-val')) $('waterdrop-x-val').textContent = `${x}%`; }
-    if (sy) { sy.value = String(y); if ($('waterdrop-y-val')) $('waterdrop-y-val').textContent = `${y}%`; }
-    _updateWaterdropDot(x, y);
-    await _saveAndRestartSlideshow();
-  });
-
-  $('settings-video-wall-btn')?.addEventListener('click', async () => {
-    const existing = await loadVideoWallpaper(S.deviceKey);
-    if (existing) openVideoEditor(); else $('video-wall-file-input')?.click();
-  });
-  $('video-wall-file-input')?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    try {
-      toast('Loading video…', 5000);
-      if (file.size > 50 * 1024 * 1024) toast('Video is large — may use significant memory');
-      const dataUrl = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload  = () => res(reader.result);
-        reader.onerror = () => rej(new Error('Read failed'));
-        reader.readAsDataURL(file);
-      });
-      await clearWallpaper(S.deviceKey);
-      await clearSlideshowWallpaper(S.deviceKey);
-      await clearSlideshowOpts(S.deviceKey);
-      await saveVideoWallpaper(S.deviceKey, dataUrl);
-      applyVideoWallpaper(dataUrl);
-      $('settings-wallpaper-preview')?.classList.add('hidden');
-      $('settings-wallpaper-remove')?.classList.remove('hidden');
-      $('slideshow-settings-block')?.classList.add('hidden');
-      toast('Video wallpaper set');
-    } catch (err) { toast('Could not set video: ' + err.message); }
-  });
-
-  $('settings-wallpaper-remove')?.addEventListener('click', async () => {
-    await clearWallpaper(S.deviceKey);
-    await clearVideoWallpaper(S.deviceKey);
-    await clearSlideshowWallpaper(S.deviceKey);
-    await clearSlideshowOpts(S.deviceKey);
-    stopSlideshowWallpaper();
-    removeVideoWallpaper();
-    applyWallpaper(null);
-    const prev = $('settings-wallpaper-preview');
-    if (prev) { prev.src = ''; prev.classList.add('hidden'); }
-    $('settings-wallpaper-remove')?.classList.add('hidden');
-    $('slideshow-settings-block')?.classList.add('hidden');
-    toast('Wallpaper removed');
-  });
-
-  $('settings-link-previews')?.addEventListener('change', async e => {
-    await settings.set(`link_previews:${S.deviceKey}`, e.target.checked);
-    toast(e.target.checked ? 'Link previews on' : 'Link previews off');
-  });
-
-  $('settings-migrate-btn')?.addEventListener('click', openSpineMigration);
-
-  // Firebase index notice dismiss
   $('firebase-index-dismiss-btn')?.addEventListener('click', async () => {
     await settings.set('firebase_index_notice_dismissed', true);
     $('firebase-index-notice')?.classList.add('hidden');
   });
 
-  // Intercept Firebase's console warning about missing indexes so we can show
-  // the notice in Settings the next time the panel is opened.
-  const _origConsoleWarn = console.warn;
-  console.warn = function(...args) {
-    const msg = String(args[0] ?? '');
-    if (msg.includes('Using an unspecified index') || msg.includes('.indexOn')) {
-      settings.set('firebase_index_warning_detected', true).catch(() => {});
-    }
-    _origConsoleWarn.apply(console, args);
-  };
+  // Start edit custom event from chat view
+  window.addEventListener('nexus:start-edit', e => {
+    if (e.detail) startEdit(e.detail);
+  });
 
-  // ============================================================
-  // KEYBOARD SHORTCUTS
-  // Registered once here so they are always active regardless of
-  // which sub-component last ran. Priority: Escape cascade first,
-  // then modifier shortcuts, then bare keys in select mode.
-  // ============================================================
+  // Keyboard Escape cascade
   document.addEventListener('keydown', e => {
-    const tag      = document.activeElement?.tagName ?? '';
-    const inInput  = tag === 'INPUT' || tag === 'TEXTAREA' ||
-                     !!document.activeElement?.isContentEditable;
-    const ctrlOrCmd = e.ctrlKey || e.metaKey;
-
-    // ---- Escape — priority cascade (always fires, even inside inputs) ----
     if (e.key === 'Escape') {
-      // 1. Context menu
-      if (document.getElementById('ctx-menu')) {
-        e.preventDefault(); closeContextMenu(); return;
-      }
-      // 2. Lightbox
+      if (document.getElementById('ctx-menu')) { closeContextMenu(); return; }
       const lb = document.getElementById('media-lightbox');
-      if (lb && !lb.classList.contains('hidden')) {
-        e.preventDefault(); lb.querySelector('.lb-close')?.click(); return;
-      }
-      // 3. Select mode
-      if (SEL.active) {
-        e.preventDefault(); exitSelectMode(); return;
-      }
-      // 4. Reply / edit banner
-      if (P4.editingMsgId || P4.replyToMsg) {
-        e.preventDefault(); cancelReplyEdit(); return;
-      }
-      // 5. Inline search
+      if (lb && !lb.classList.contains('hidden')) { lb.querySelector('.lb-close')?.click(); return; }
+      const modal = document.querySelector('.migrate-modal, #crop-overlay, #nexus-confirm-overlay, #nexus-prompt-overlay, #pcp-modal, #slideshow-editor-modal');
+      if (modal) { modal.remove(); return; }
+      if (SEL.active) { exitSelectMode(); return; }
+      if (P4.editingMsgId || P4.replyToMsg) { cancelReplyEdit(); return; }
       const hdr = document.querySelector('.app-header');
-      if (hdr?.dataset?.searchMode) {
-        e.preventDefault(); closeSearch(); return;
-      }
-      // 6. Settings overlay
-      if (!$('overlay-settings')?.classList.contains('hidden')) {
-        e.preventDefault(); hide('overlay-settings'); return;
-      }
-      // 7. Account switcher overlay
-      if (!$('overlay-accounts')?.classList.contains('hidden')) {
-        e.preventDefault(); hide('overlay-accounts'); return;
-      }
-      return;
-    }
-
-    // ---- Delete / Backspace — delete selected messages ----
-    if ((e.key === 'Delete' || e.key === 'Backspace') && SEL.active && !inInput) {
-      e.preventDefault();
-      $('sel-delete-btn')?.click();
-      return;
-    }
-
-    // ---- Ctrl / Cmd shortcuts ----
-    if (ctrlOrCmd) {
-      // Ctrl+F — toggle search
-      if ((e.key === 'f' || e.key === 'F') && S.currentScreen === 's-app') {
-        e.preventDefault();
-        const hdr = document.querySelector('.app-header');
-        if (hdr?.dataset?.searchMode) closeSearch(); else openSearch();
-        return;
-      }
-      // Ctrl+, — toggle settings
-      if (e.key === ',' && S.currentScreen === 's-app') {
-        e.preventDefault();
-        if (!$('overlay-settings')?.classList.contains('hidden')) hide('overlay-settings');
-        else openSettings();
-        return;
-      }
-      // Ctrl+A — select all (only in select mode, not overriding browser default elsewhere)
-      if ((e.key === 'a' || e.key === 'A') && SEL.active && !inInput) {
-        e.preventDefault();
-        document.querySelectorAll('.msg-row.msg-selectable').forEach(row => {
-          const id = row.dataset.id;
-          if (id && !id.startsWith('pending-')) {
-            SEL.selected.add(id);
-            row.classList.add('msg-selected');
-          }
-        });
-        updateSelectToolbar();
-        return;
-      }
-      // Ctrl+Enter — force-send even if composing multi-line text
-      if (e.key === 'Enter' && S.currentScreen === 's-app' && inInput &&
-          document.activeElement?.id === 'msg-input') {
-        e.preventDefault();
-        handleSend();
-        return;
-      }
+      if (hdr?.classList.contains('search-active')) { closeSearch(); return; }
+      if (!$('overlay-settings')?.classList.contains('hidden')) { hide('overlay-settings'); return; }
+      if (!$('overlay-accounts')?.classList.contains('hidden')) { hide('overlay-accounts'); return; }
     }
   });
 }
 
 // ============================================================
-// ANDROID BACK BUTTON (History API)
+// ANDROID BACK GESTURE (NON-TRAPPING)
 // ============================================================
-// On Android, the system back gesture/button fires a 'popstate' event when
-// the page has a history entry to pop. We push a dummy entry whenever a
-// closeable layer is open, so back navigates *within* the app instead of
-// exiting it. The priority order mirrors the Escape cascade in bindEvents().
 function pushBackEntry() {
   history.pushState({ nexusLayer: true }, '');
 }
 
 function handleBackGesture() {
-  // Walk the same priority ladder as the Escape key handler.
-  if (document.getElementById('ctx-menu'))               { closeContextMenu();  pushBackEntry(); return; }
+  if (document.getElementById('ctx-menu')) { closeContextMenu(); return true; }
 
   const lb = document.getElementById('media-lightbox');
-  if (lb && !lb.classList.contains('hidden'))            { lb.querySelector('.lb-close')?.click(); pushBackEntry(); return; }
+  if (lb && !lb.classList.contains('hidden')) { lb.querySelector('.lb-close')?.click(); return true; }
 
-  // Any dynamic modal (migrate, crop, change-passphrase, etc.)
   const modal = document.querySelector('.migrate-modal, #crop-overlay, #nexus-confirm-overlay, #nexus-prompt-overlay, #pcp-modal, #slideshow-editor-modal');
-  if (modal)                                             { modal.remove(); pushBackEntry(); return; }
+  if (modal) { modal.remove(); return true; }
 
-  if (SEL.active)                                        { exitSelectMode();    pushBackEntry(); return; }
-  if (P4.editingMsgId || P4.replyToMsg)                 { cancelReplyEdit();   pushBackEntry(); return; }
+  if (SEL.active) { exitSelectMode(); return true; }
+  if (P4.editingMsgId || P4.replyToMsg) { cancelReplyEdit(); return true; }
 
   const hdr = document.querySelector('.app-header');
-  if (hdr?.dataset?.searchMode)                         { closeSearch();       pushBackEntry(); return; }
+  if (hdr?.classList.contains('search-active')) { closeSearch(); return true; }
 
-  if (!$('overlay-settings')?.classList.contains('hidden')) { hide('overlay-settings'); pushBackEntry(); return; }
-  if (!$('overlay-accounts')?.classList.contains('hidden')) { hide('overlay-accounts'); pushBackEntry(); return; }
+  if (!$('overlay-settings')?.classList.contains('hidden')) { hide('overlay-settings'); return true; }
+  if (!$('overlay-accounts')?.classList.contains('hidden')) { hide('overlay-accounts'); return true; }
 
-  // Nothing closeable — let the browser handle it (navigate back / exit).
+  return false;
 }
 
-// Push an initial history entry on load so the first back press can be caught.
-// (Without this, the very first popstate has nothing to pop and the browser exits.)
-history.replaceState({ nexusBase: true }, '');
-window.addEventListener('popstate', e => {
-  if (e.state?.nexusBase) {
-    // We're at the base entry — push it back immediately so the next back press
-    // can also be caught, then run the close logic.
-    history.pushState({ nexusBase: true }, '');
-    handleBackGesture();
-  } else {
-    handleBackGesture();
-  }
+window.addEventListener('popstate', () => {
+  handleBackGesture();
 });
 
-// Whenever a closeable layer opens, push a history entry so back can pop it.
-// We hook into the existing open functions by wrapping them after definition.
-// Layers that push their own history entry:
 document.addEventListener('nexus:layeropen', () => pushBackEntry());
 
 // ============================================================
@@ -4995,14 +3028,13 @@ document.addEventListener('nexus:layeropen', () => pushBackEntry());
 document.addEventListener('nexus:locked', () => {
   hide('overlay-settings');
   hide('overlay-accounts');
-  const header = document.querySelector('.app-header');
-  if (header?.dataset?.searchMode) closeSearch();
+  closeSearch();
   const lockableScreens = ['s-app', 's-passphrase-entry', 's-pin-setup', 's-biometrics-setup', 's-device-name'];
   if (lockableScreens.includes(S.currentScreen)) showLockScreen();
 });
 
 // ============================================================
-// BOOT
+// BOOTSTRAP
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();

@@ -1621,7 +1621,7 @@
     .media-audio audio {
       border-radius: 8px; height: 36px;
     }
-    .media-caption { font-size: 12px; color: var(--text-dim); padding: 4px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+    .media-caption { font-size: 13px; color: var(--text-dim); padding: 6px 2px 2px; word-break: break-word; overflow-wrap: break-word; line-height: 1.4; max-width: 360px; }
     .media-file {
       display: flex; align-items: center; gap: 12px; padding: 12px 14px;
       background: var(--surface3); border-radius: var(--radius-md); cursor: pointer;
@@ -1654,6 +1654,9 @@
     }
     .lb-close:hover { background: rgba(255,255,255,0.25); }
     #lb-img { max-width: 95vw; max-height: 85vh; object-fit: contain; border-radius: var(--radius-md); }
+    #lb-video { max-width: 95vw; max-height: 85vh; border-radius: var(--radius-md); outline: none; }
+    .media-video { cursor: pointer; }
+    .video-placeholder { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(0,0,0,0.15); border-radius: var(--radius-sm); }
     .lb-title { margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 13px; }
     /* Attach button */
     .attach-btn {
@@ -2256,6 +2259,9 @@
 
     /* ---- Misc ---------------------------------------------------------------- */
     /* ---- Inline search bar (replaces header) ----------------------------- */
+    .app-header.search-active > :not(#header-search-bar) {
+      display: none !important;
+    }
     .search-bar-inline {
       display: flex;
       align-items: center;
