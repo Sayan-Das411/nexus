@@ -2660,6 +2660,42 @@
       background: var(--surface3);
       color: var(--text);
     }
+    .mp-quality-wrap {
+      display: inline-flex;
+      align-items: center;
+      position: relative;
+    }
+    .mp-quality-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: var(--radius-full);
+      font-size: 11.5px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      cursor: pointer;
+      user-select: none;
+      transition: all var(--transition);
+    }
+    .mp-quality-pill:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+    .mp-quality-wrap input[type="checkbox"] {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .mp-quality-wrap input[type="checkbox"]:checked + .mp-quality-pill {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
     .mp-preview-area {
       flex: 1;
       min-height: 200px;

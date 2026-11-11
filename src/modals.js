@@ -532,6 +532,10 @@ export async function showMediaPreview(file, S, onConfirm) {
         <div class="mp-header">
           <button id="mp-cancel" class="mp-cancel-btn">&times;</button>
           <span class="mp-title">Send media</span>
+          <label id="mp-quality-wrap" class="mp-quality-wrap hidden" title="Send original uncompressed photo">
+            <input type="checkbox" id="mp-quality-toggle">
+            <span class="mp-quality-pill">HD Original</span>
+          </label>
         </div>
         <div id="mp-preview-area" class="mp-preview-area"></div>
         <div class="mp-bottom">
@@ -549,10 +553,11 @@ export async function showMediaPreview(file, S, onConfirm) {
     document.getElementById('mp-cancel').addEventListener('click', closeMediaPreview);
     document.getElementById('mp-send').addEventListener('click', () => {
       const caption = document.getElementById('mp-caption')?.value?.trim() || null;
+      const isOriginal = document.getElementById('mp-quality-toggle')?.checked || false;
       const f  = _pendingMediaFile;
       const cb = _pendingOnConfirm;
       closeMediaPreview();
-      if (f && cb) cb(f, caption);
+      if (f && cb) cb(f, caption, { isOriginal });
     });
     document.getElementById('mp-caption').addEventListener('keydown', e => {
       if (e.key === 'Escape') {
@@ -563,12 +568,31 @@ export async function showMediaPreview(file, S, onConfirm) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const caption = document.getElementById('mp-caption')?.value?.trim() || null;
+        const isOriginal = document.getElementById('mp-quality-toggle')?.checked || false;
         const f  = _pendingMediaFile;
         const cb = _pendingOnConfirm;
         closeMediaPreview();
-        if (f && cb) cb(f, caption);
+        if (f && cb) cb(f, caption, { isOriginal });
       }
     });
+  }
+
+  const qualitySetting = (await settings.get('image_quality')) ?? 'compressed';
+  const isCompressible = file.type.startsWith('image/') && file.type !== 'image/gif' && file.type !== 'image/svg+xml';
+  const qualityWrap = document.getElementById('mp-quality-wrap');
+  const qualityToggle = document.getElementById('mp-quality-toggle');
+
+  if (qualityWrap && qualityToggle) {
+    if (qualitySetting === 'ask' && isCompressible) {
+      qualityWrap.classList.remove('hidden');
+      qualityToggle.checked = false;
+    } else if (qualitySetting === 'original' && isCompressible) {
+      qualityWrap.classList.add('hidden');
+      qualityToggle.checked = true;
+    } else {
+      qualityWrap.classList.add('hidden');
+      qualityToggle.checked = false;
+    }
   }
 
   const area = document.getElementById('mp-preview-area');

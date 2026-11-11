@@ -100,11 +100,11 @@ export async function generateThumbnail(file, maxSize = 200) {
 // Upload a media file and return the message payload fields to include
 // alongside the encrypted text payload.
 // Returns: { uuid, mediaType, fileName, fileSize, mimeType, thumbnailB64? }
-export async function prepareMediaMessage(uid, encKey, file, onProgress, caption = null) {
+export async function prepareMediaMessage(uid, encKey, file, onProgress, caption = null, shouldCompress = true) {
   validateFile(file);
 
-  // Compress images
-  const fileToUpload = await compressImage(file);
+  // Compress images if enabled
+  const fileToUpload = shouldCompress ? await compressImage(file) : file;
 
   // Generate thumbnail for images (stored encrypted in message metadata)
   const thumbB64 = await generateThumbnail(file);
@@ -121,9 +121,9 @@ export async function prepareMediaMessage(uid, encKey, file, onProgress, caption
   return {
     uuid,
     mediaType:  file.type.startsWith('image/') ? 'image' : 'file',
-    fileName:   file.name,
-    fileSize:   file.size,
-    mimeType:   file.type,
+    fileName:   fileToUpload.name ?? file.name,
+    fileSize:   fileToUpload.size ?? file.size,
+    mimeType:   fileToUpload.type ?? file.type,
     caption:    caption || null,
     encThumb,  // { ciphertext, iv } or null
   };

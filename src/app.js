@@ -1212,7 +1212,7 @@ function hideUploadProgress() {
   if (fill) fill.style.width = '0%';
 }
 
-async function handleMediaSend(file, caption) {
+async function handleMediaSend(file, caption, { isOriginal = false } = {}) {
   if (S.mediaUploading) { toast('Please wait — upload in progress'); return; }
   if (!S.spineConfig?.accounts?.length) {
     toast('No Drive accounts linked. Add one in Settings → Storage.');
@@ -1240,8 +1240,11 @@ async function handleMediaSend(file, caption) {
 
   showUploadProgress(0);
 
+  const qualityMode = (await settings.get('image_quality')) ?? 'compressed';
+  const shouldCompress = qualityMode === 'original' ? false : (qualityMode === 'compressed' ? true : !isOriginal);
+
   try {
-    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption);
+    const mediaPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption, shouldCompress);
     const metaText = JSON.stringify({
       uuid:      mediaPayload.uuid,
       mediaType: mediaPayload.mediaType,
@@ -1279,7 +1282,7 @@ async function handleMediaSend(file, caption) {
       const ok = await driveAutoReAuth(err.driveUid);
       if (ok) {
         try {
-          const retryPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption);
+          const retryPayload = await prepareMediaMessage(S.uid, S.encKey, file, updateUploadProgress, caption, shouldCompress);
           const metaText2 = JSON.stringify({
             uuid: retryPayload.uuid, mediaType: retryPayload.mediaType,
             fileName: retryPayload.fileName, fileSize: retryPayload.fileSize,
@@ -1749,6 +1752,11 @@ async function openSettings() {
   const lpEnabled = await settings.get(`link_previews:${S.deviceKey}`);
   const lpToggle = $('settings-link-previews');
   if (lpToggle) lpToggle.checked = lpEnabled !== false;
+
+  const qualSel = $('settings-image-quality');
+  if (qualSel) {
+    qualSel.value = (await settings.get('image_quality')) ?? 'compressed';
+  }
 
   renderStorageSummary();
   await loadAndApplyFontSize(S.deviceKey);
@@ -3023,6 +3031,16 @@ function bindEvents() {
     applyFontSize(px);
     await settings.set(`font_size:${S.deviceKey}`, px);
     toast('Font size updated');
+  });
+
+  $('settings-image-quality')?.addEventListener('change', async e => {
+    await settings.set('image_quality', e.target.value);
+    const labels = {
+      compressed: 'Images will be compressed',
+      original: 'Images will be sent in original quality',
+      ask: 'Will ask quality before sending images',
+    };
+    toast(labels[e.target.value] || 'Setting saved');
   });
 
   $('settings-change-passphrase-btn')?.addEventListener('click', () => {
