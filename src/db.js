@@ -84,7 +84,7 @@ export async function initDB() {
     };
 
     req.onsuccess = ev => { _db = ev.target.result; resolve(_db); };
-    req.onerror   = ev => reject(ev.target.error);
+    req.onerror   = ev => { _dbPromise = null; reject(ev.target.error); };
   });
 
   return _dbPromise;
@@ -171,8 +171,24 @@ export const messageCache = {
   byAccount:    uid         => dbGetAllByIndex('messages', 'uid', uid),
   deleteMsg:    id          => dbDelete('messages', id),
   clearAccount: async uid   => {
-    const msgs = await dbGetAllByIndex('messages', 'uid', uid);
-    await Promise.all(msgs.map(m => dbDelete('messages', m.id)));
+    const db = await initDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('messages', 'readwrite');
+      const store = tx.objectStore('messages');
+      const idx = store.index('uid');
+      const req = idx.openKeyCursor(IDBKeyRange.only(uid));
+      req.onsuccess = ev => {
+        const cursor = ev.target.result;
+        if (cursor) {
+          store.delete(cursor.primaryKey);
+          cursor.continue();
+        } else {
+          res();
+        }
+      };
+      req.onerror = () => rej(req.error);
+      tx.onerror = () => rej(tx.error);
+    });
   },
 };
 

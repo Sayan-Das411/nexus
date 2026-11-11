@@ -288,7 +288,12 @@ export async function downloadMedia(uid, encKey, uuid) {
   const text     = new TextDecoder().decode(buf);
   const { ciphertext, iv } = JSON.parse(text);
   const b64      = await decrypt(encKey, ciphertext, iv);
-  const bytes    = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const binary   = atob(b64);
+  const len      = binary.length;
+  const bytes    = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
 
   return new Blob([bytes], { type: entry.mimeType ?? 'application/octet-stream' });
 }

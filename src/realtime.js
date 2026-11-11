@@ -243,6 +243,7 @@ export async function markRead(uid, msgId, deviceId) {
 export async function removeDevice(uid, deviceId) {
   await remove(ref(db(), P.device(uid, deviceId)));
   await remove(ref(db(), P.presenceDevice(uid, deviceId)));
+  await remove(ref(db(), P.typingDevice(uid, deviceId)));
 }
 
 // ---- Typing indicator -------------------------------------------------------

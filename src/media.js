@@ -31,6 +31,7 @@ export function validateFile(file) {
 // Returns a new Blob (JPEG) or the original file if not an image or small enough.
 export async function compressImage(file) {
   if (!file.type.startsWith('image/')) return file;
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file; // preserve animations & vectors
   if (file.size < 200 * 1024) return file; // skip compression for small images
 
   return new Promise((resolve, reject) => {

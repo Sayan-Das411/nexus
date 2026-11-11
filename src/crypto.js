@@ -32,7 +32,13 @@ function buf2b64(buf) {
 }
 
 function b642buf(b64) {
-  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const binary = atob(b64);
+  const len    = binary.length;
+  const bytes  = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 function buf2hex(buf) {

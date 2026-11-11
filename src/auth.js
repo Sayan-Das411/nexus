@@ -10,8 +10,8 @@ import { initializeApp, getApps, getApp }       from 'https://www.gstatic.com/fi
 import { getAuth, signInWithPopup, GoogleAuthProvider,
          onAuthStateChanged, signOut as fbSignOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
-import { settings, accountStore } from './db.js';
-import { storeDriveToken } from './drive.js';
+import { settings, accountStore, keyStore, lockStore, drafts, messageCache, biometricStore } from './db.js';
+import { storeDriveToken, clearDriveToken } from './drive.js';
 import { generateDeviceId }        from './crypto.js';
 
 let _app  = null;
@@ -76,15 +76,16 @@ export async function switchToAccount(uid) {
   provider.addScope('https://www.googleapis.com/auth/drive.file');
 
   const result = await signInWithPopup(_auth, provider);
-  // Extract and store OAuth token for this account's Drive access
-  const credential2 = GoogleAuthProvider.credentialFromResult(result);
-  if (credential2?.accessToken) {
-    storeDriveToken(uid, credential2.accessToken, 3600);
-  }
   if (result.user.uid !== uid) {
     // User picked the wrong Google account in the popup
     await fbSignOut(_auth);
     throw new Error(`Wrong account. Please sign in as ${account.email}`);
+  }
+
+  // Extract and store OAuth token for this account's Drive access
+  const credential2 = GoogleAuthProvider.credentialFromResult(result);
+  if (credential2?.accessToken) {
+    storeDriveToken(uid, credential2.accessToken, 3600);
   }
 
   await accountStore.set({ ...account, isCurrentAccount: true, lastSignedIn: Date.now() });
@@ -105,6 +106,18 @@ export async function switchToAccount(uid) {
 // Does NOT delete Firebase data — that lives on Google's servers.
 export async function removeLocalAccount(uid) {
   await accountStore.delete(uid);
+  try {
+    await Promise.allSettled([
+      keyStore.delete(uid),
+      lockStore.delete(uid),
+      drafts.delete(uid),
+      biometricStore.delete(uid),
+      messageCache.clearAccount(uid),
+      settings.delete(`device_id:${uid}`),
+    ]);
+  } catch {}
+  clearDriveToken(uid);
+  try { localStorage.removeItem(`nexus_device_id_${uid}`); } catch {}
 
   const current = await settings.get('current_uid');
   if (current === uid) {
