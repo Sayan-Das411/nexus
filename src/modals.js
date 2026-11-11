@@ -237,8 +237,16 @@ export async function openSpineMigration(S, onMigrated) {
 
     try {
       const { getFullManifest } = await import('./spine.js');
-      if (!hasDriveToken(fromUid)) { logLine('ERROR: Source account needs re-authentication.'); return; }
-      if (!hasDriveToken(toUid))   { logLine('ERROR: Destination account needs re-authentication.'); return; }
+      if (!hasDriveToken(fromUid)) {
+        logLine(`Re-authenticating source (${fromAcc.email})…`);
+        await window.Nexus?.reAuthDrive?.(fromUid);
+        if (!hasDriveToken(fromUid)) { logLine('ERROR: Source account needs re-authentication.'); return; }
+      }
+      if (!hasDriveToken(toUid)) {
+        logLine(`Re-authenticating destination (${toAcc.email})…`);
+        await window.Nexus?.reAuthDrive?.(toUid);
+        if (!hasDriveToken(toUid)) { logLine('ERROR: Destination account needs re-authentication.'); return; }
+      }
 
       logLine(`Starting: ${fromAcc.email} → ${toAcc.email}`);
       const toFolderId = toAcc.folderId ?? await driveEnsureFolder(toUid, S.uid);
