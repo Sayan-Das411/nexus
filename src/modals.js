@@ -599,5 +599,27 @@ export function closeMediaPreview() {
   _pendingMediaFile = null;
   _pendingOnConfirm = null;
   const overlay = document.getElementById('media-preview-overlay');
-  if (overlay) overlay.classList.add('hidden');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    const area = overlay.querySelector('#mp-preview-area');
+    if (area) {
+      // Pause all playing videos/audios and clean up object URLs
+      area.querySelectorAll('video, audio').forEach(media => {
+        try {
+          media.pause();
+          if (media.src) {
+            URL.revokeObjectURL(media.src);
+            media.src = '';
+            media.load();
+          }
+        } catch {}
+      });
+      area.querySelectorAll('img').forEach(img => {
+        if (img.src && img.src.startsWith('blob:')) {
+          URL.revokeObjectURL(img.src);
+        }
+      });
+      area.innerHTML = '';
+    }
+  }
 }

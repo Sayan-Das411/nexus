@@ -152,7 +152,7 @@ export function showLightbox(url, title, isVideo = false) {
     const close = () => {
       lb.classList.add('hidden');
       const v = lb.querySelector('#lb-video');
-      if (v) { v.pause(); v.src = ''; }
+      if (v) { v.pause(); v.src = ''; v.load(); }
       if (lb.dataset.activeUrl) {
         URL.revokeObjectURL(lb.dataset.activeUrl);
         delete lb.dataset.activeUrl;
